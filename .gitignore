@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.exe
+create-icon.js
+assets/icon-48.png
+assets/icon-64.png

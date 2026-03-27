@@ -1,0 +1,39 @@
+{
+  "name": "claude-ui",
+  "version": "1.0.0",
+  "description": "Claude Code 3-Panel Wrapper UI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:all": "electron-builder --win --mac",
+    "dev": "electron . --dev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^41.0.4",
+    "electron-builder": "^26.8.1",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.5"
+  },
+  "build": {
+    "appId": "com.claudeui.app",
+    "productName": "Claude UI",
+    "files": [
+      "main.js",
+      "src/**/*"
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "assets/icon.png"
+    },
+    "mac": {
+      "target": "zip",
+      "category": "public.app-category.developer-tools"
+    }
+  }
+}
