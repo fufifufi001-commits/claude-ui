@@ -45,7 +45,6 @@ function checkClaudeCLI() {
 
 // ---- Window ----
 let mainWindow;
-let claudeProcess = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -69,7 +68,6 @@ function createWindow() {
 
 app.whenReady().then(createWindow);
 app.on('window-all-closed', () => {
-  if (claudeProcess) claudeProcess.kill();
   app.quit();
 });
 
@@ -140,22 +138,58 @@ ipcMain.on('window-maximize', () => {
 ipcMain.on('window-close', () => mainWindow?.close());
 
 // ---- IPC: Claude CLI ----
-ipcMain.handle('send-to-claude', async (event, message, imagePaths) => {
+const crypto = require('crypto');
+
+ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, sessionContext, skipPermissions) => {
   const settings = loadSettings() || {};
   const claudeCmd = settings.claudePath || 'claude';
   const cwd = settings.workingDir || process.cwd();
 
+  const tempDir = path.join(app.getPath('temp'), 'claude-ui-msg');
+  if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+
+  // Write context to temp file if needed (for old sessions without session ID)
+  let contextFile = null;
+  if (sessionContext && sessionContext !== '__new__') {
+    contextFile = path.join(tempDir, `ctx_${Date.now()}.txt`);
+    fs.writeFileSync(contextFile, sessionContext, 'utf-8');
+  }
+
   return new Promise((resolve, reject) => {
-    const args = ['--print'];
+    const args = ['-p', '--verbose'];
+
+    // Skip all permission checks if enabled
+    if (skipPermissions) {
+      args.push('--dangerously-skip-permissions');
+    }
+
+    // Session continuity
+    const isFirstMessage = sessionContext === '__new__' || contextFile;
+    if (sessionId && isFirstMessage) {
+      args.push('--session-id', sessionId);
+    } else if (sessionId) {
+      args.push('--resume', sessionId);
+    }
+
+    // Context from old sessions
+    if (contextFile) {
+      args.push('--append-system-prompt-file', contextFile);
+    }
+
+    // Images
     if (imagePaths && imagePaths.length > 0) {
       imagePaths.forEach(p => args.push('--image', p));
     }
-    args.push(message);
 
-    const proc = spawn(claudeCmd, args, { shell: true, cwd });
+    // Spawn with piped stdin - write message there (avoids shell encoding issues)
+    const proc = spawn(claudeCmd, args, { shell: true, cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+
+    // Send message via stdin and close it
+    proc.stdin.write(message, 'utf-8');
+    proc.stdin.end();
 
     let output = '';
-    let error = '';
+    let errorOutput = '';
 
     proc.stdout.on('data', (data) => {
       const chunk = data.toString();
@@ -164,68 +198,78 @@ ipcMain.handle('send-to-claude', async (event, message, imagePaths) => {
     });
 
     proc.stderr.on('data', (data) => {
-      error += data.toString();
+      errorOutput += data.toString();
       mainWindow?.webContents.send('claude-agent-log', data.toString());
     });
 
     proc.on('close', (code) => {
-      if (code === 0) resolve(output);
-      else reject(new Error(error || `Process exited with code ${code}`));
+      // Clean up temp files
+      if (contextFile) { try { fs.unlinkSync(contextFile); } catch (e) {} }
+
+      if (code === 0) {
+        resolve({ text: output, sessionId: sessionId });
+      } else {
+        reject(new Error(errorOutput || output || `Process exited with code ${code}`));
+      }
     });
   });
 });
 
-let interactiveProcess = null;
-
-ipcMain.handle('start-interactive-session', async (event, workingDir) => {
-  if (interactiveProcess) interactiveProcess.kill();
-  const settings = loadSettings() || {};
-  const claudeCmd = settings.claudePath || 'claude';
-
-  interactiveProcess = spawn(claudeCmd, [], {
-    shell: true,
-    cwd: workingDir || settings.workingDir || process.cwd(),
-    stdio: ['pipe', 'pipe', 'pipe']
-  });
-
-  interactiveProcess.stdout.on('data', (data) => {
-    mainWindow?.webContents.send('claude-stream', data.toString());
-  });
-  interactiveProcess.stderr.on('data', (data) => {
-    mainWindow?.webContents.send('claude-agent-log', data.toString());
-  });
-  interactiveProcess.on('close', (code) => {
-    mainWindow?.webContents.send('claude-session-ended', code);
-    interactiveProcess = null;
-  });
-
-  return true;
-});
-
-ipcMain.handle('send-interactive', async (event, message) => {
-  if (interactiveProcess && interactiveProcess.stdin.writable) {
-    interactiveProcess.stdin.write(message + '\n');
-    return true;
-  }
-  return false;
-});
+// Interactive session handlers kept for backward compatibility
+ipcMain.handle('start-interactive-session', async () => false);
+ipcMain.handle('send-interactive', async () => false);
 
 // ---- IPC: Session History ----
+// Topic label map for display (filename slug -> display name)
+const TOPIC_LABELS = {
+  'cauldroncrush': 'CauldronCrush',
+  'vitalboost': 'VitalBoost',
+  'kozmetify': 'Kozmetify',
+  'claude_ui': 'Claude UI',
+  'comfyui': 'ComfyUI',
+  'masal': 'Masal App',
+  'git_github': 'Git/GitHub',
+  'ai_provider': 'AI Provider',
+  'apple_ios': 'Apple/iOS',
+  'wsl_build': 'WSL Build',
+  'mobil_geli_tirme': 'Mobil Dev',
+  'mobil_geliştirme': 'Mobil Dev',
+};
+
+function detectTopicFromFilename(filename) {
+  const slug = filename.replace(/^\d{4}-\d{2}-\d{2}_/, '').replace(/(_cli)?(_\d+)?\.md$/, '').toLowerCase();
+  return TOPIC_LABELS[slug] || null;
+}
+
 function collectMdFiles(dir) {
   const results = [];
   if (!fs.existsSync(dir)) return results;
   const files = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
   files.forEach(f => {
     try {
-      const content = fs.readFileSync(path.join(dir, f), 'utf-8');
+      const fullPath = path.join(dir, f);
+      const stat = fs.statSync(fullPath);
+      const content = fs.readFileSync(fullPath, 'utf-8');
       const titleMatch = content.match(/^# (.+)/m);
       const dateMatch = content.match(/\*\*Tarih:\*\* (.+)/m);
+      const timeMatch = content.match(/\*\*Saat:\*\* (.+)/m);
+      const topicMatch = content.match(/\*\*Konu:\*\* (.+)/m);
+      const msgCountMatch = content.match(/\*\*Mesaj:\*\* (.+)/m);
+      const isCli = f.endsWith('_cli.md') || /_cli_\d+\.md$/.test(f);
+      const topic = topicMatch ? topicMatch[1] : detectTopicFromFilename(f);
+
       results.push({
         filename: f,
         subdir: path.basename(dir) === path.basename(getHistoryDir()) ? '' : path.basename(dir),
         title: titleMatch ? titleMatch[1] : f,
         date: dateMatch ? dateMatch[1] : f.substring(0, 10),
-        path: path.join(dir, f)
+        time: timeMatch ? timeMatch[1] : '',
+        topic: topic || '',
+        source: isCli ? 'CLI' : 'UI',
+        msgCount: msgCountMatch ? msgCountMatch[1] : '',
+        mtime: stat.mtimeMs,
+        size: stat.size,
+        path: fullPath
       });
     } catch (e) {}
   });
@@ -245,7 +289,20 @@ ipcMain.handle('get-sessions', async () => {
       all.push(...collectMdFiles(sessionsDir));
     }
 
-    return all.sort((a, b) => b.filename.localeCompare(a.filename));
+    // Dedup: same topic+date+size = keep only the newest
+    const seen = new Map();
+    const deduped = [];
+    for (const s of all.sort((a, b) => b.mtime - a.mtime)) {
+      const key = `${s.date}_${s.size}`;
+      if (seen.has(key) && s.size > 10000) {
+        // Skip duplicate large files with same date and size
+        continue;
+      }
+      seen.set(key, true);
+      deduped.push(s);
+    }
+
+    return deduped.sort((a, b) => b.mtime - a.mtime);
   } catch (e) {
     return [];
   }
@@ -272,6 +329,41 @@ ipcMain.handle('save-session', async (event, filename, content) => {
   if (!fs.existsSync(sessionsDir)) fs.mkdirSync(sessionsDir, { recursive: true });
   fs.writeFileSync(path.join(sessionsDir, filename), content, 'utf-8');
   return true;
+});
+
+// ---- IPC: Delete Session ----
+ipcMain.handle('delete-session', async (event, filename, subdir) => {
+  const histDir = getHistoryDir();
+  const candidates = [
+    subdir ? path.join(histDir, subdir, filename) : null,
+    path.join(histDir, 'sessions', filename),
+    path.join(histDir, filename)
+  ].filter(Boolean);
+  for (const fp of candidates) {
+    if (fs.existsSync(fp)) {
+      fs.unlinkSync(fp);
+      return true;
+    }
+  }
+  return false;
+});
+
+// ---- IPC: Rename Session ----
+ipcMain.handle('rename-session', async (event, oldFilename, newFilename, subdir) => {
+  const histDir = getHistoryDir();
+  const candidates = [
+    subdir ? path.join(histDir, subdir, oldFilename) : null,
+    path.join(histDir, 'sessions', oldFilename),
+    path.join(histDir, oldFilename)
+  ].filter(Boolean);
+  for (const fp of candidates) {
+    if (fs.existsSync(fp)) {
+      const dir = path.dirname(fp);
+      fs.renameSync(fp, path.join(dir, newFilename));
+      return true;
+    }
+  }
+  return false;
 });
 
 // Senkron versiyon (beforeunload icin)
@@ -363,15 +455,19 @@ function syncTerminalSessions(opts = {}) {
     return bestTopic;
   }
 
+  // Cache synced session IDs to avoid reading every file on every check
+  const syncedCache = new Map();
+  try {
+    const cliFiles = fs.readdirSync(sessionsDir).filter(f => /_cli(_\d+)?\.md$/.test(f));
+    for (const f of cliFiles) {
+      const content = fs.readFileSync(path.join(sessionsDir, f), 'utf-8');
+      const match = content.match(/session:([a-f0-9-]+)/);
+      if (match) syncedCache.set(match[1], f);
+    }
+  } catch (e) {}
+
   function isAlreadySynced(sessionId) {
-    try {
-      const files = fs.readdirSync(sessionsDir).filter(f => f.endsWith('_cli.md'));
-      for (const f of files) {
-        const content = fs.readFileSync(path.join(sessionsDir, f), 'utf-8');
-        if (content.includes(`session:${sessionId}`)) return f;
-      }
-    } catch (e) {}
-    return false;
+    return syncedCache.get(sessionId) || false;
   }
 
   function parseConversation(jsonlPath) {
@@ -417,9 +513,9 @@ function syncTerminalSessions(opts = {}) {
       const stat = fs.statSync(filePath);
       if (stat.size < 1000) continue;
       if (!opts.all) {
-        const today = new Date().toISOString().split('T')[0];
-        const fileDate = stat.mtime.toISOString().split('T')[0];
-        if (fileDate !== today) continue;
+        // Sync last 7 days instead of just today
+        const cutoff = Date.now() - (7 * 24 * 60 * 60 * 1000);
+        if (stat.mtimeMs < cutoff) continue;
       }
       conversations.push({ path: filePath, sessionId: file.replace('.jsonl', ''), mtime: stat.mtime, size: stat.size });
     }
@@ -429,7 +525,14 @@ function syncTerminalSessions(opts = {}) {
   const errors = [];
 
   for (const conv of conversations) {
-    if (!opts.force && isAlreadySynced(conv.sessionId)) { skipped++; continue; }
+    const existingFile = isAlreadySynced(conv.sessionId);
+    if (!opts.force && existingFile) {
+      // Update existing file if the source is newer (conversation grew)
+      const existingPath = path.join(sessionsDir, existingFile);
+      const existingStat = fs.statSync(existingPath);
+      if (conv.mtime <= existingStat.mtime) { skipped++; continue; }
+      // Source is newer — will re-generate and overwrite
+    }
     try {
       const messages = parseConversation(conv.path);
       if (messages.length < 2) { skipped++; continue; }
@@ -441,11 +544,14 @@ function syncTerminalSessions(opts = {}) {
       const dateStr = firstTime.toISOString().split('T')[0];
       const startTime = firstTime.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
       const endTime = lastTime.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
-      // Topic detection: ilk 20 mesajdan belirle (uzun oturumlarda konu kaymasini onler)
       const topicText = messages.slice(0, 20).map(m => m.text).join(' ');
       const topic = detectTopic(topicText);
       const firstUserMsg = messages.find(m => m.role === 'user')?.text || 'Session';
-      const title = firstUserMsg.substring(0, 80).replace(/\n/g, ' ');
+      // Build meaningful title: skip greetings
+      const greetingRe = /^(merhaba|günaydın|selam|hey|hi|hello|claude|son)\s*/gi;
+      const meaningfulMsg = messages.find(m => m.role === 'user' && m.text && m.text.replace(greetingRe, '').trim().length > 5);
+      const msgSummary = meaningfulMsg ? meaningfulMsg.text.replace(greetingRe, '').trim().substring(0, 60) : firstUserMsg.substring(0, 60);
+      const title = topic ? `${TOPIC_LABELS[topic] || topic} — ${msgSummary}` : msgSummary.replace(/\n/g, ' ');
       const userCount = messages.filter(m => m.role === 'user').length;
       const assistantCount = messages.filter(m => m.role === 'assistant').length;
 
@@ -468,15 +574,20 @@ function syncTerminalSessions(opts = {}) {
       }
       md += `\n---\n_<!-- session:${conv.sessionId} -->_\n`;
 
-      const slug = topic || firstUserMsg.substring(0, 40).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-      let filename = `${dateStr}_${slug}_cli.md`;
-      let outPath = path.join(sessionsDir, filename);
-      if (fs.existsSync(outPath) && !opts.force) {
-        const base = filename.replace('.md', '');
-        let n = 2;
-        while (fs.existsSync(path.join(sessionsDir, `${base}_${n}.md`))) n++;
-        outPath = path.join(sessionsDir, `${base}_${n}.md`);
-        filename = `${base}_${n}.md`;
+      // If already synced, update the existing file instead of creating new one
+      let outPath;
+      if (existingFile) {
+        outPath = path.join(sessionsDir, existingFile);
+      } else {
+        const slug = topic || firstUserMsg.substring(0, 40).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+        let filename = `${dateStr}_${slug}_cli.md`;
+        outPath = path.join(sessionsDir, filename);
+        if (fs.existsSync(outPath)) {
+          const base = filename.replace('.md', '');
+          let n = 2;
+          while (fs.existsSync(path.join(sessionsDir, `${base}_${n}.md`))) n++;
+          outPath = path.join(sessionsDir, `${base}_${n}.md`);
+        }
       }
 
       fs.writeFileSync(outPath, md, 'utf-8');

@@ -11,7 +11,8 @@ const state = {
   templates: [],
   // Chat tabs
   chatTabs: [],
-  activeChatTab: 0
+  activeChatTab: 0,
+  skipPermissions: false
 };
 
 function createChatTab(name) {
@@ -25,7 +26,9 @@ function createChatTab(name) {
     messages: [],
     codeBlocks: [],
     activeCodeTab: 0,
-    scrollPos: 0
+    scrollPos: 0,
+    sessionId: null,
+    sessionContext: null
   };
   state.chatTabs.push(tab);
   return tab;
@@ -38,6 +41,7 @@ function saveCurrentTabState() {
   tab.codeBlocks = [...state.codeBlocks];
   tab.activeCodeTab = state.activeCodeTab;
   tab.scrollPos = chatMessages.scrollTop;
+  // sessionId is already on the tab object, no need to copy
 }
 
 function loadTabState(index) {
@@ -82,6 +86,20 @@ function renderChatTabs() {
     item.addEventListener('click', (e) => {
       if (e.target.classList.contains('tab-close')) return;
       switchToTab(parseInt(item.dataset.index));
+    });
+    // Double-click to rename tab
+    item.addEventListener('dblclick', async (e) => {
+      e.stopPropagation();
+      const idx = parseInt(item.dataset.index);
+      const tab = state.chatTabs[idx];
+      if (!tab) return;
+      const newName = await showPrompt('Sohbet adi:', tab.label);
+      if (newName && newName.trim()) {
+        tab.label = newName.trim();
+        tab.labelUpdated = true;
+        renderChatTabs();
+        showToast('Tab yeniden adlandirildi');
+      }
     });
   });
 
@@ -153,28 +171,7 @@ function detectTopic(text) {
 }
 
 function updateTabLabel() {
-  const tab = state.chatTabs[state.activeChatTab];
-  if (!tab || tab.labelUpdated) return;
-
-  // Collect all text so far
-  const allText = state.messages.map(m => m.text || '').join(' ');
-  const topic = detectTopic(allText);
-
-  if (topic) {
-    tab.label = topic + (tab.tabNum > 1 ? ` (t${tab.tabNum})` : '');
-    tab.labelUpdated = true;
-    renderChatTabs();
-  } else if (state.messages.length >= 2) {
-    // Fallback: use first meaningful user message
-    const firstUser = state.messages.find(m => m.role === 'user');
-    if (firstUser && firstUser.text) {
-      const cleaned = firstUser.text.replace(/^(merhaba|günaydın|selam|hey|hi|hello|claude)\s*/gi, '').trim();
-      const label = cleaned.length > 5 ? cleaned.substring(0, 25) : firstUser.text.substring(0, 25);
-      tab.label = label.replace(/\n/g, ' ') + (tab.tabNum > 1 ? ` (t${tab.tabNum})` : '');
-      tab.labelUpdated = true;
-      renderChatTabs();
-    }
-  }
+  // Tab label is set by user at creation — no auto-rename
 }
 
 // ===== DOM Elements =====
@@ -280,6 +277,42 @@ function showToast(text) {
   toast.textContent = text;
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 2500);
+}
+
+// ===== Custom Prompt Dialog =====
+function showPrompt(title, defaultValue = '') {
+  return new Promise((resolve) => {
+    const existing = document.querySelector('.prompt-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'prompt-overlay';
+    overlay.innerHTML = `
+      <div class="prompt-dialog">
+        <div class="prompt-title">${title}</div>
+        <input class="prompt-input" type="text" value="${escapeHtml(defaultValue)}" />
+        <div class="prompt-actions">
+          <button class="prompt-cancel">Iptal</button>
+          <button class="prompt-ok">Tamam</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const input = overlay.querySelector('.prompt-input');
+    input.focus();
+    input.select();
+
+    const close = (val) => { overlay.remove(); resolve(val); };
+
+    overlay.querySelector('.prompt-ok').onclick = () => close(input.value);
+    overlay.querySelector('.prompt-cancel').onclick = () => close(null);
+    overlay.onclick = (e) => { if (e.target === overlay) close(null); };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') close(input.value);
+      if (e.key === 'Escape') close(null);
+    });
+  });
 }
 
 // ===== Working Directory =====
@@ -425,7 +458,8 @@ const DEFAULT_TEMPLATES = [
   { label: 'Test Yaz', prompt: 'Bu kod icin test yaz:' },
   { label: 'Acikla', prompt: 'Bu kodu acikla, ne yapiyor:' },
   { label: 'Optimize', prompt: 'Bu kodu optimize et, performansi artir:' },
-  { label: 'Incele', prompt: 'Bu dosyayi incele ve iyilestirme onerileri sun:' }
+  { label: 'Incele', prompt: 'Bu dosyayi incele ve iyilestirme onerileri sun:' },
+  { label: 'Tam Yetki', prompt: '', danger: true }
 ];
 
 const templateModal = $('#templateModal');
@@ -449,15 +483,26 @@ function renderTemplateButtons() {
 
   state.templates.forEach((tpl, i) => {
     const btn = document.createElement('button');
-    btn.className = 'prompt-btn';
+    btn.className = 'prompt-btn' + (tpl.danger ? ' prompt-btn-danger' : '');
     btn.textContent = tpl.label;
     btn.dataset.prompt = tpl.prompt;
-    btn.onclick = () => {
-      chatInput.value = chatInput.value ? chatInput.value + '\n' + tpl.prompt : tpl.prompt;
-      chatInput.focus();
-      chatInput.style.height = 'auto';
-      chatInput.style.height = Math.min(chatInput.scrollHeight, 150) + 'px';
-    };
+
+    if (tpl.danger) {
+      // Toggle dangerously-skip-permissions mode
+      btn.onclick = () => {
+        state.skipPermissions = !state.skipPermissions;
+        btn.classList.toggle('active', state.skipPermissions);
+        btn.textContent = state.skipPermissions ? 'Tam Yetki ON' : 'Tam Yetki';
+        showToast(state.skipPermissions ? 'Tum izinler otomatik onaylanacak!' : 'Izin modu normal');
+      };
+    } else {
+      btn.onclick = () => {
+        chatInput.value = chatInput.value ? chatInput.value + '\n' + tpl.prompt : tpl.prompt;
+        chatInput.focus();
+        chatInput.style.height = 'auto';
+        chatInput.style.height = Math.min(chatInput.scrollHeight, 150) + 'px';
+      };
+    }
     container.insertBefore(btn, editBtn);
   });
 }
@@ -572,8 +617,61 @@ async function sendMessage() {
   if (!text && state.pastedImages.length === 0) return;
   if (state.isWaiting) return;
 
+  // Handle exit command: save session and reset tab
+  if (/^(exit|quit|cikis|çıkış)$/i.test(text)) {
+    chatInput.value = '';
+    chatInput.style.height = 'auto';
+    addMessage('user', text);
+    addMessage('assistant', 'Oturum kapatildi. Gorusmek uzere!');
+    await autoSaveSession();
+    // Reset current tab to clean state
+    const currentTab = state.chatTabs[state.activeChatTab];
+    if (currentTab) {
+      currentTab.messages = [];
+      currentTab.codeBlocks = [];
+      currentTab.sessionId = null;
+      currentTab.sessionContext = null;
+      currentTab.resumeFallback = false;
+      currentTab.labelUpdated = false;
+      currentTab.label = `Sohbet ${currentTab.tabNum}`;
+    }
+    state.messages = [];
+    state.codeBlocks = [];
+    state.activeCodeTab = 0;
+    chatMessages.innerHTML = '';
+    showWelcome();
+    renderCodePanel();
+    renderChatTabs();
+    await loadSessions();
+    chatInput.focus();
+    showToast('Oturum kaydedildi');
+    return;
+  }
+
   const imagePaths = state.pastedImages.map(img => img.path);
   const imageDataUrls = state.pastedImages.map(img => img.base64);
+
+  // Get current tab for conversation continuity
+  const currentTab = state.chatTabs[state.activeChatTab];
+  let sessionId = currentTab?.sessionId || null;
+  // Determine how to handle session continuity
+  let sessionContext = null;
+
+  if (sessionId) {
+    // Existing session (loaded UI session or continued tab) → use --resume, no context needed
+    sessionContext = null;
+  } else {
+    // No session yet → generate new UUID + signal for --session-id
+    sessionId = window.claude.generateUUID();
+    const tabContext = currentTab?.sessionContext || null;
+    if (tabContext) {
+      // Old/CLI session loaded with context
+      sessionContext = tabContext;
+    } else {
+      // Brand new conversation
+      sessionContext = '__new__';
+    }
+  }
 
   addMessage('user', text, imageDataUrls);
   chatInput.value = '';
@@ -587,13 +685,42 @@ async function sendMessage() {
 
   try {
     state.currentResponse = '';
-    const response = await window.claude.sendMessage(text, imagePaths);
+    let response;
+    try {
+      response = await window.claude.sendMessage(text, imagePaths, sessionId, sessionContext, state.skipPermissions);
+    } catch (resumeErr) {
+      // If --resume failed (JSONL missing), fallback to context approach
+      const isResumeFail = resumeErr.message?.includes('No conversation found') || resumeErr.message?.includes('already in use');
+      if (currentTab?.resumeFallback && currentTab.sessionContext && isResumeFail) {
+        state.currentResponse = '';
+        const fallbackId = window.claude.generateUUID();
+        response = await window.claude.sendMessage(text, imagePaths, fallbackId, currentTab.sessionContext, state.skipPermissions);
+        sessionId = fallbackId;
+        currentTab.resumeFallback = false;
+      } else {
+        throw resumeErr;
+      }
+    }
     removeTyping();
     // Remove streaming message if exists
     const streamMsg = chatMessages.querySelector('.message.streaming');
     if (streamMsg) streamMsg.remove();
-    addMessage('assistant', response);
-    extractCodeBlocks(response);
+
+    // Extract text from response
+    const responseText = (typeof response === 'object' && response !== null) ? response.text : response;
+
+    // Store session ID for conversation continuity (--resume on next messages)
+    if (sessionId && currentTab) {
+      currentTab.sessionId = sessionId;
+    }
+    // Clear sessionContext after first use
+    if (currentTab) {
+      currentTab.sessionContext = null;
+      currentTab.resumeFallback = false;
+    }
+
+    addMessage('assistant', responseText);
+    extractCodeBlocks(responseText);
   } catch (err) {
     removeTyping();
     addMessage('assistant', `Hata: ${err.message}`);
@@ -915,28 +1042,236 @@ async function loadSessions() {
 }
 
 function renderSessionList(sessions) {
-  sessionList.innerHTML = sessions.length === 0
-    ? '<div style="color:var(--text-muted);font-size:12px;padding:8px;">Henuz gecmis yok</div>'
-    : sessions.map(s => {
-      const isCli = s.filename.endsWith('_cli.md');
-      const sourceTag = isCli ? '<span class="session-item-source">CLI</span>' : '';
-      return `
-      <div class="session-item" data-file="${s.filename}" data-subdir="${s.subdir || ''}" title="${s.title}">
-        <div class="session-item-title">${escapeHtml(s.title)}${sourceTag}</div>
-        <div class="session-item-date">${s.date}${s.subdir ? ' &middot; ' + s.subdir : ''}</div>
+  if (sessions.length === 0) {
+    sessionList.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px;">Henuz gecmis yok</div>';
+    return;
+  }
+
+  // Group sessions by date category
+  const today = new Date().toISOString().split('T')[0];
+  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+
+  const groups = { today: [], yesterday: [], thisWeek: [], older: [] };
+  for (const s of sessions) {
+    if (s.date === today) groups.today.push(s);
+    else if (s.date === yesterday) groups.yesterday.push(s);
+    else if (s.date >= weekAgo) groups.thisWeek.push(s);
+    else groups.older.push(s);
+  }
+
+  let html = '';
+  function renderGroup(label, items) {
+    if (items.length === 0) return '';
+    let out = `<div class="session-group-label">${label}</div>`;
+    for (const s of items) {
+      const sourceTag = s.source === 'CLI' ? '<span class="session-item-source">CLI</span>' : '';
+      const topicTag = s.topic ? `<span class="session-item-topic">${escapeHtml(s.topic)}</span>` : '';
+      // Show time: extract start time from "HH:MM - HH:MM" or "HH:MM"
+      const timeStr = s.time ? s.time.split(' - ')[0].trim() : '';
+      const timeTag = timeStr ? `<span class="session-item-time">${timeStr}</span>` : '';
+      // Clean title: remove topic prefix if redundant, truncate
+      let title = s.title || s.filename;
+      if (title.length > 60) title = title.substring(0, 57) + '...';
+
+      out += `
+      <div class="session-item" data-file="${s.filename}" data-subdir="${s.subdir || ''}" title="${escapeHtml(s.title)}\n${s.date} ${s.time || ''}\n${s.msgCount || ''}">
+        <div class="session-item-title">${escapeHtml(title)}${sourceTag}</div>
+        <div class="session-item-meta">${topicTag}${timeTag}</div>
       </div>`;
-    }).join('');
+    }
+    return out;
+  }
+
+  html += renderGroup('Bugun', groups.today);
+  html += renderGroup('Dun', groups.yesterday);
+  html += renderGroup('Bu Hafta', groups.thisWeek);
+  html += renderGroup('Onceki', groups.older.slice(0, 30));
+
+  sessionList.innerHTML = html;
 
   sessionList.querySelectorAll('.session-item').forEach(item => {
     item.onclick = async () => {
       const content = await window.claude.loadSession(item.dataset.file, item.dataset.subdir);
-      if (content) {
-        addMessage('assistant', `**Yuklenen session:**\n\n${content}`);
-      }
+      if (!content) return;
+
       sessionList.querySelectorAll('.session-item').forEach(i => i.classList.remove('active'));
       item.classList.add('active');
+
+      // Parse session and load into a new tab
+      loadSessionIntoTab(content, item.dataset.file);
+    };
+
+    // Right-click context menu
+    item.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showSessionContextMenu(e.clientX, e.clientY, item.dataset.file, item.dataset.subdir);
+    });
+  });
+}
+
+// ===== Session Context Menu =====
+function showSessionContextMenu(x, y, filename, subdir) {
+  // Remove existing menu
+  const existing = document.querySelector('.session-context-menu');
+  if (existing) existing.remove();
+
+  const menu = document.createElement('div');
+  menu.className = 'session-context-menu';
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.innerHTML = `
+    <div class="ctx-item" data-action="rename">Yeniden Adlandir</div>
+    <div class="ctx-item" data-action="export">Dosya Yolunu Kopyala</div>
+    <div class="ctx-divider"></div>
+    <div class="ctx-item ctx-danger" data-action="delete">Sil</div>
+  `;
+  document.body.appendChild(menu);
+
+  // Keep menu within viewport
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = (x - rect.width) + 'px';
+  if (rect.bottom > window.innerHeight) menu.style.top = (y - rect.height) + 'px';
+
+  // Handle actions
+  menu.querySelectorAll('.ctx-item').forEach(item => {
+    item.onclick = async () => {
+      const action = item.dataset.action;
+      menu.remove();
+
+      if (action === 'delete') {
+        const confirmName = await showPrompt(`Silmek icin "sil" yazin:`, '');
+        if (confirmName && confirmName.toLowerCase() === 'sil') {
+          await window.claude.deleteSession(filename, subdir);
+          showToast('Session silindi');
+          await loadSessions();
+        }
+      } else if (action === 'rename') {
+        const baseName = filename.replace('.md', '');
+        const newName = await showPrompt('Yeni dosya adi:', baseName);
+        if (newName && newName !== baseName) {
+          const newFilename = newName.endsWith('.md') ? newName : newName + '.md';
+          await window.claude.renameSession(filename, newFilename, subdir);
+          showToast('Session yeniden adlandirildi');
+          await loadSessions();
+        }
+      } else if (action === 'export') {
+        const settings = await window.claude.getSettings();
+        const histDir = settings?.historyDir || '';
+        const fullPath = subdir ? `${histDir}\\${subdir}\\${filename}` : `${histDir}\\sessions\\${filename}`;
+        navigator.clipboard.writeText(fullPath);
+        showToast('Dosya yolu kopyalandi');
+      }
     };
   });
+
+  // Close on click outside
+  const closeMenu = (e) => {
+    if (!menu.contains(e.target)) {
+      menu.remove();
+      document.removeEventListener('click', closeMenu);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeMenu), 10);
+}
+
+// Parse session markdown to extract messages and session ID
+function parseSessionMarkdown(content) {
+  // Extract CLI session ID if present
+  const sessionIdMatch = content.match(/session:([a-f0-9-]+)/);
+  const sessionId = sessionIdMatch ? sessionIdMatch[1] : null;
+
+  // Extract topic
+  const topicMatch = content.match(/\*\*Konu:\*\* (.+)/m);
+  const topic = topicMatch ? topicMatch[1].trim() : null;
+
+  // Parse messages from ## Diyalog section
+  const messages = [];
+  // Match both formats: "### Kullanici (time)" and "### ⚪/🟢 Claude (time)"
+  const parts = content.split(/^### /m).slice(1); // Split by ### headers, skip content before first
+  for (const part of parts) {
+    const headerEnd = part.indexOf('\n');
+    if (headerEnd === -1) continue;
+    const header = part.substring(0, headerEnd);
+    const body = part.substring(headerEnd + 1).replace(/\n---[\s\S]*$/, '').replace(/\n## [\s\S]*$/, '').trim();
+    if (!body) continue;
+
+    if (/Kullanici/i.test(header)) {
+      messages.push({ role: 'user', text: body });
+    } else if (/Claude/i.test(header)) {
+      messages.push({ role: 'assistant', text: body });
+    }
+  }
+
+  // Detect source: UI sessions have **SessionID:** field, CLI have <!-- session: -->
+  const uiSessionMatch = content.match(/\*\*SessionID:\*\* ([a-f0-9-]+)/);
+  const source = uiSessionMatch ? 'UI' : (sessionId ? 'CLI' : 'unknown');
+  // Prefer UI sessionId field over CLI comment
+  const finalSessionId = uiSessionMatch ? uiSessionMatch[1] : sessionId;
+
+  return { sessionId: finalSessionId, topic, messages, source };
+}
+
+// Build context summary from old session messages (for --append-system-prompt)
+function buildSessionContext(messages, topic) {
+  // Take last 10 exchanges max to avoid huge prompts
+  const recent = messages.slice(-20);
+  let ctx = 'Kullanici ile onceki konusmamizin devami. Kaldigi yerden devam et.\n';
+  if (topic) ctx += `Konu: ${topic}\n`;
+  ctx += '\nOnceki diyalog (son mesajlar):\n\n';
+  for (const m of recent) {
+    const label = m.role === 'user' ? 'Kullanici' : 'Claude';
+    // Truncate very long messages to keep context manageable
+    const text = m.text.length > 500 ? m.text.substring(0, 500) + '...' : m.text;
+    ctx += `${label}: ${text}\n\n`;
+  }
+  return ctx;
+}
+
+// Load a session into a new chat tab
+function loadSessionIntoTab(content, filename) {
+  const parsed = parseSessionMarkdown(content);
+
+  // Create new tab
+  saveCurrentTabState();
+  const tabName = filename.replace(/^\d{4}-\d{2}-\d{2}_/, '').replace(/\.md$/, '').replace(/_/g, ' ');
+  const tab = createChatTab(tabName);
+  state.activeChatTab = state.chatTabs.length - 1;
+  state.messages = [];
+  state.codeBlocks = [];
+  state.activeCodeTab = 0;
+
+  // Clear chat and render loaded messages
+  chatMessages.innerHTML = '';
+  for (const msg of parsed.messages) {
+    renderMessageToDOM(msg.role, msg.text);
+    state.messages.push({ role: msg.role, text: msg.text, images: [], timestamp: Date.now() });
+    // Extract code blocks from assistant messages
+    if (msg.role === 'assistant') {
+      extractCodeBlocks(msg.text);
+    }
+  }
+
+  if (parsed.source === 'UI' && parsed.sessionId) {
+    // UI session: use --resume for full memory (fallback to context on error)
+    tab.sessionId = parsed.sessionId;
+    tab.sessionContext = buildSessionContext(parsed.messages, parsed.topic); // fallback
+    tab.resumeFallback = true; // flag to retry with context if resume fails
+    showToast('Session yuklendi — tam hafiza ile devam');
+  } else {
+    // CLI/old session: use context approach
+    tab.sessionContext = buildSessionContext(parsed.messages, parsed.topic);
+    showToast('Session yuklendi — context ile devam');
+  }
+
+  // Save loaded messages to tab
+  tab.messages = [...state.messages];
+  tab.codeBlocks = [...state.codeBlocks];
+
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  renderChatTabs();
+  renderCodePanel();
+  chatInput.focus();
 }
 
 let searchTimeout = null;
@@ -966,9 +1301,10 @@ sessionSearch.addEventListener('input', async () => {
       sessionList.querySelectorAll('.session-item').forEach(item => {
         item.onclick = async () => {
           const content = await window.claude.loadSession(item.dataset.file, item.dataset.subdir);
-          if (content) addMessage('assistant', `**Yuklenen:**\n\n${content}`);
+          if (!content) return;
           sessionList.querySelectorAll('.session-item').forEach(i => i.classList.remove('active'));
           item.classList.add('active');
+          loadSessionIntoTab(content, item.dataset.file);
         };
       });
     } else {
@@ -996,30 +1332,29 @@ async function autoSaveTabSession(tab) {
   const topicText = msgs.slice(0, 20).map(m => m.text || '').join(' ');
   const topic = detectTopic(topicText);
 
-  let titleSlug;
-  if (topic) {
-    titleSlug = topic.toLowerCase().replace(/[^a-z0-9]/g, '_');
-  } else {
-    const firstUserMsg = msgs.find(m => m.role === 'user')?.text || 'session';
-    const cleaned = firstUserMsg.replace(/^(merhaba|günaydın|selam|hey|claude)\s*/gi, '').trim();
-    titleSlug = (cleaned.length > 5 ? cleaned : firstUserMsg).substring(0, 40).replace(/[^a-zA-Z0-9\u00C0-\u024F\u0400-\u04FFğüşıöçĞÜŞİÖÇ]/g, '_').toLowerCase();
-  }
+  // Use tab label as filename slug
+  const tabLabel = tab.label || 'session';
+  const titleSlug = tabLabel.substring(0, 40).replace(/[^a-zA-Z0-9\u00C0-\u024F\u0400-\u04FFğüşıöçĞÜŞİÖÇ]/g, '_').toLowerCase();
   const tabSuffix = (tab.tabNum && tab.tabNum > 1) ? `_t${tab.tabNum}` : '';
   const filename = `${today}_${titleSlug}${tabSuffix}.md`;
 
-  const content = generateSessionMarkdownFor(msgs, codes);
+  const tabSessionId = tab.sessionId || null;
+  const content = generateSessionMarkdownFor(msgs, codes, topic, tabSessionId);
   await window.claude.saveSession(filename, content);
   await loadSessions();
 }
 
 function generateSessionMarkdown() {
-  return generateSessionMarkdownFor(state.messages, state.codeBlocks);
+  const topicText = state.messages.slice(0, 20).map(m => m.text || '').join(' ');
+  const currentTab = state.chatTabs[state.activeChatTab];
+  return generateSessionMarkdownFor(state.messages, state.codeBlocks, detectTopic(topicText), currentTab?.sessionId);
 }
 
-function generateSessionMarkdownFor(msgs, codes) {
+function generateSessionMarkdownFor(msgs, codes, topic, sessionId) {
   const now = new Date();
-  const firstMsg = msgs.find(m => m.role === 'user')?.text || 'Session';
-  const title = firstMsg.substring(0, 80).replace(/\n/g, ' ');
+  // Use current tab label as title
+  const currentTab = state.chatTabs[state.activeChatTab];
+  const title = currentTab?.label || topic || 'Session';
 
   // Baslangic-bitis saat araligi
   const firstTime = msgs[0]?.timestamp ? new Date(msgs[0].timestamp) : now;
@@ -1036,6 +1371,8 @@ function generateSessionMarkdownFor(msgs, codes) {
   md += `**Saat:** ${timeRange}\n`;
   md += `**Kaynak:** Claude UI\n`;
   md += `**Mesaj:** ${userCount} kullanici, ${assistantCount} asistan\n`;
+  if (topic) md += `**Konu:** ${topic}\n`;
+  if (sessionId) md += `**SessionID:** ${sessionId}\n`;
   if (state.workingDir) md += `**Dizin:** ${state.workingDir}\n`;
   md += `\n---\n\n`;
 
@@ -1164,9 +1501,14 @@ async function checkAndRunSetup() {
 }
 
 // ===== Chat Tab Events =====
-function addNewChatTab() {
+async function addNewChatTab() {
+  const name = await showPrompt('Sohbet adi:', '');
+  if (name === null) return; // user cancelled
+  const label = name.trim() || `Sohbet ${state.chatTabs.length + 1}`;
+
   saveCurrentTabState();
-  createChatTab();
+  const tab = createChatTab(label);
+  tab.labelUpdated = true; // Prevent auto-rename
   state.activeChatTab = state.chatTabs.length - 1;
   state.messages = [];
   state.codeBlocks = [];
@@ -1176,7 +1518,7 @@ function addNewChatTab() {
   renderCodePanel();
   renderChatTabs();
   chatInput.focus();
-  showToast('Yeni sohbet acildi');
+  showToast(`"${label}" acildi`);
 }
 
 // ===== Init =====
