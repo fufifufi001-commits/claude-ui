@@ -211,38 +211,111 @@ ipcMain.handle('send-interactive', async (event, message) => {
 });
 
 // ---- IPC: Session History ----
+function collectMdFiles(dir) {
+  const results = [];
+  if (!fs.existsSync(dir)) return results;
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
+  files.forEach(f => {
+    try {
+      const content = fs.readFileSync(path.join(dir, f), 'utf-8');
+      const titleMatch = content.match(/^# (.+)/m);
+      const dateMatch = content.match(/\*\*Tarih:\*\* (.+)/m);
+      results.push({
+        filename: f,
+        subdir: path.basename(dir) === path.basename(getHistoryDir()) ? '' : path.basename(dir),
+        title: titleMatch ? titleMatch[1] : f,
+        date: dateMatch ? dateMatch[1] : f.substring(0, 10),
+        path: path.join(dir, f)
+      });
+    } catch (e) {}
+  });
+  return results;
+}
+
 ipcMain.handle('get-sessions', async () => {
   try {
     const histDir = getHistoryDir();
     if (!fs.existsSync(histDir)) fs.mkdirSync(histDir, { recursive: true });
-    const files = fs.readdirSync(histDir).filter(f => f.endsWith('.md'));
-    return files.map(f => {
-      const content = fs.readFileSync(path.join(histDir, f), 'utf-8');
-      const titleMatch = content.match(/^# (.+)/m);
-      const dateMatch = content.match(/\*\*Tarih:\*\* (.+)/m);
-      return {
-        filename: f,
-        title: titleMatch ? titleMatch[1] : f,
-        date: dateMatch ? dateMatch[1] : f.substring(0, 10),
-        path: path.join(histDir, f)
-      };
-    }).sort((a, b) => b.filename.localeCompare(a.filename));
+
+    // Collect from root and sessions/ subfolder
+    let all = [];
+    all.push(...collectMdFiles(histDir));
+    const sessionsDir = path.join(histDir, 'sessions');
+    if (fs.existsSync(sessionsDir)) {
+      all.push(...collectMdFiles(sessionsDir));
+    }
+
+    return all.sort((a, b) => b.filename.localeCompare(a.filename));
   } catch (e) {
     return [];
   }
 });
 
-ipcMain.handle('load-session', async (event, filename) => {
-  const filePath = path.join(getHistoryDir(), filename);
-  if (fs.existsSync(filePath)) return fs.readFileSync(filePath, 'utf-8');
+ipcMain.handle('load-session', async (event, filename, subdir) => {
+  const histDir = getHistoryDir();
+  // Try subdir first, then sessions/, then root
+  const candidates = [
+    subdir ? path.join(histDir, subdir, filename) : null,
+    path.join(histDir, 'sessions', filename),
+    path.join(histDir, filename)
+  ].filter(Boolean);
+
+  for (const fp of candidates) {
+    if (fs.existsSync(fp)) return fs.readFileSync(fp, 'utf-8');
+  }
   return null;
 });
 
 ipcMain.handle('save-session', async (event, filename, content) => {
-  const histDir = getHistoryDir();
-  if (!fs.existsSync(histDir)) fs.mkdirSync(histDir, { recursive: true });
-  fs.writeFileSync(path.join(histDir, filename), content, 'utf-8');
+  // Save new sessions to sessions/ subfolder
+  const sessionsDir = path.join(getHistoryDir(), 'sessions');
+  if (!fs.existsSync(sessionsDir)) fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, filename), content, 'utf-8');
   return true;
+});
+
+// ---- IPC: Search across sessions and projects ----
+ipcMain.handle('search-history', async (event, query) => {
+  const histDir = getHistoryDir();
+  const results = [];
+  const q = query.toLowerCase();
+
+  function searchDir(dir, category) {
+    if (!fs.existsSync(dir)) return;
+    const items = fs.readdirSync(dir);
+    items.forEach(item => {
+      const fullPath = path.join(dir, item);
+      const stat = fs.statSync(fullPath);
+      if (stat.isDirectory() && item !== '.git' && item !== 'node_modules') {
+        searchDir(fullPath, category || item);
+      } else if (item.endsWith('.md') || item.endsWith('.json')) {
+        try {
+          const content = fs.readFileSync(fullPath, 'utf-8');
+          if (content.toLowerCase().includes(q) || item.toLowerCase().includes(q)) {
+            const titleMatch = content.match(/^# (.+)/m);
+            results.push({
+              filename: item,
+              title: titleMatch ? titleMatch[1] : item,
+              category: category || 'sessions',
+              path: fullPath,
+              snippet: getSnippet(content, q)
+            });
+          }
+        } catch (e) {}
+      }
+    });
+  }
+
+  function getSnippet(text, query) {
+    const idx = text.toLowerCase().indexOf(query);
+    if (idx === -1) return '';
+    const start = Math.max(0, idx - 40);
+    const end = Math.min(text.length, idx + query.length + 40);
+    return (start > 0 ? '...' : '') + text.substring(start, end) + (end < text.length ? '...' : '');
+  }
+
+  searchDir(histDir, '');
+  return results.slice(0, 50);
 });
 
 // ---- IPC: Temp Images ----

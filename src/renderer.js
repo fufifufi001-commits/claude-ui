@@ -607,15 +607,15 @@ function renderSessionList(sessions) {
   sessionList.innerHTML = sessions.length === 0
     ? '<div style="color:var(--text-muted);font-size:12px;padding:8px;">Henuz gecmis yok</div>'
     : sessions.map(s => `
-      <div class="session-item" data-file="${s.filename}" title="${s.title}">
+      <div class="session-item" data-file="${s.filename}" data-subdir="${s.subdir || ''}" title="${s.title}">
         <div class="session-item-title">${escapeHtml(s.title)}</div>
-        <div class="session-item-date">${s.date}</div>
+        <div class="session-item-date">${s.date}${s.subdir ? ' &middot; ' + s.subdir : ''}</div>
       </div>
     `).join('');
 
   sessionList.querySelectorAll('.session-item').forEach(item => {
     item.onclick = async () => {
-      const content = await window.claude.loadSession(item.dataset.file);
+      const content = await window.claude.loadSession(item.dataset.file, item.dataset.subdir);
       if (content) {
         addMessage('assistant', `**Yuklenen session:**\n\n${content}`);
       }
@@ -625,14 +625,46 @@ function renderSessionList(sessions) {
   });
 }
 
+let searchTimeout = null;
 sessionSearch.addEventListener('input', async () => {
-  const query = sessionSearch.value.toLowerCase();
-  const sessions = await window.claude.getSessions();
-  const filtered = sessions.filter(s =>
-    s.title.toLowerCase().includes(query) ||
-    s.filename.toLowerCase().includes(query)
-  );
-  renderSessionList(filtered);
+  const query = sessionSearch.value.trim().toLowerCase();
+  clearTimeout(searchTimeout);
+
+  if (!query) {
+    await loadSessions();
+    return;
+  }
+
+  // Quick filter on loaded sessions first
+  searchTimeout = setTimeout(async () => {
+    if (query.length >= 2) {
+      // Deep search across all files (sessions + projects)
+      const results = await window.claude.searchHistory(query);
+      sessionList.innerHTML = results.length === 0
+        ? '<div style="color:var(--text-muted);font-size:12px;padding:8px;">Sonuc bulunamadi</div>'
+        : results.map(r => `
+          <div class="session-item" data-file="${r.filename}" data-subdir="${r.category}" title="${r.snippet}">
+            <div class="session-item-title">${escapeHtml(r.title)}</div>
+            <div class="session-item-date">${r.category || 'session'} &middot; ${r.filename.substring(0, 10)}</div>
+          </div>
+        `).join('');
+
+      sessionList.querySelectorAll('.session-item').forEach(item => {
+        item.onclick = async () => {
+          const content = await window.claude.loadSession(item.dataset.file, item.dataset.subdir);
+          if (content) addMessage('assistant', `**Yuklenen:**\n\n${content}`);
+          sessionList.querySelectorAll('.session-item').forEach(i => i.classList.remove('active'));
+          item.classList.add('active');
+        };
+      });
+    } else {
+      const sessions = await window.claude.getSessions();
+      const filtered = sessions.filter(s =>
+        s.title.toLowerCase().includes(query) || s.filename.toLowerCase().includes(query)
+      );
+      renderSessionList(filtered);
+    }
+  }, 300);
 });
 
 async function autoSaveSession() {
