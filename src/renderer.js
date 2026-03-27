@@ -452,6 +452,18 @@ function addMessage(role, text, images) {
   msg.className = `message ${role}`;
 
   let html = '';
+
+  // Assistant messages get dot indicator
+  if (role === 'assistant' && text) {
+    const hasCode = /```\w*\n[\s\S]*?```/.test(text);
+    if (hasCode) {
+      msg.classList.add('has-code');
+      html += '<span class="msg-dot code" title="Kod iceriyor - tikla"></span>';
+    } else {
+      html += '<span class="msg-dot text" title="Metin cevabi"></span>';
+    }
+  }
+
   if (images && images.length > 0) {
     html += images.map(src => `<img src="${src}" alt="screenshot">`).join('');
   }
@@ -465,14 +477,16 @@ function addMessage(role, text, images) {
 
   // Click-to-send code blocks to code panel
   if (role === 'assistant') {
-    msg.querySelectorAll('pre').forEach(pre => {
-      pre.addEventListener('click', () => {
+    const hasCodeBlocks = msg.querySelectorAll('pre').length > 0;
+
+    msg.querySelectorAll('pre').forEach((pre, preIdx) => {
+      pre.addEventListener('click', (e) => {
+        e.stopPropagation();
         const codeEl = pre.querySelector('code');
         const code = codeEl ? codeEl.textContent : pre.textContent;
         const langMatch = codeEl?.className?.match(/lang-(\w+)/);
         const lang = langMatch ? langMatch[1] : 'text';
 
-        // Ensure code panel is visible
         $('#codePanel').classList.remove('collapsed');
 
         state.codeBlocks.push({ lang, code, id: state.codeBlocks.length });
@@ -481,6 +495,20 @@ function addMessage(role, text, images) {
         showToast(`Kod paneline eklendi (${lang})`);
       });
     });
+
+    // Click on message body (not pre) jumps to related code in panel
+    if (hasCodeBlocks) {
+      msg.addEventListener('click', () => {
+        // Find related code blocks that were extracted from this message
+        const msgIdx = state.messages.length; // current message index
+        // Jump to the latest code block
+        if (state.codeBlocks.length > 0) {
+          $('#codePanel').classList.remove('collapsed');
+          state.activeCodeTab = state.codeBlocks.length - 1;
+          renderCodePanel();
+        }
+      });
+    }
   }
 
   state.messages.push({ role, text, images: images || [], timestamp: Date.now() });
@@ -692,10 +720,19 @@ function generateSessionMarkdown() {
   md += `\n---\n\n`;
 
   md += `## Diyalog\n\n`;
-  state.messages.forEach(m => {
-    const role = m.role === 'user' ? 'Kullanici' : 'Claude';
-    md += `### ${role} (${new Date(m.timestamp).toLocaleTimeString('tr-TR')})\n`;
-    md += `${m.text}\n\n`;
+  state.messages.forEach((m, i) => {
+    const ts = new Date(m.timestamp).toLocaleTimeString('tr-TR');
+    if (m.role === 'user') {
+      md += `### Kullanici (${ts})\n`;
+      md += `${m.text}\n\n`;
+    } else {
+      // Claude response - mark with dot type
+      const hasCode = /```\w*\n[\s\S]*?```/.test(m.text || '');
+      const dot = hasCode ? '🟢' : '⚪';
+      const codeRef = hasCode ? ` → [Kod #${state.codeBlocks.length}]` : '';
+      md += `### ${dot} Claude (${ts})${codeRef}\n`;
+      md += `${m.text}\n\n`;
+    }
   });
 
   if (state.codeBlocks.length > 0) {

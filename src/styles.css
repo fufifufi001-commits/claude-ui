@@ -196,7 +196,16 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
 .message.assistant {
   align-self: flex-start; background: var(--bg-secondary);
   border: 1px solid var(--border); border-bottom-left-radius: 2px;
+  position: relative; padding-left: 26px;
 }
+.message.assistant .msg-dot {
+  position: absolute; left: 10px; top: 14px;
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.msg-dot.text { background: #e4e4e7; }
+.msg-dot.code { background: #34d399; }
+.message.assistant.has-code { cursor: pointer; }
+.message.assistant.has-code:hover { border-color: var(--accent); }
 .message.assistant pre {
   background: var(--code-bg); padding: 10px; border-radius: var(--radius-sm);
   overflow-x: auto; margin: 8px 0; font-size: 12.5px;
