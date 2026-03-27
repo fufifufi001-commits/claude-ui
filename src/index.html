@@ -157,6 +157,12 @@
 
     <!-- Chat Panel -->
     <main id="chatPanel" class="chat-panel">
+      <!-- Chat Tabs -->
+      <div class="chat-tabs-bar">
+        <div class="chat-tabs-list" id="chatTabsList">
+          <!-- tabs rendered by JS, + button included inside -->
+        </div>
+      </div>
       <div id="chatMessages" class="chat-messages"></div>
 
       <!-- Image preview area -->
@@ -208,12 +214,15 @@
     <!-- Resize handle -->
     <div class="resize-handle" id="resizeRight"></div>
 
+    <!-- Code Panel Toggle (visible when collapsed) -->
+    <div class="code-panel-reopen" id="codePanelReopen" title="Kod panelini ac (Ctrl+J)" style="display:none;">&#128196;</div>
+
     <!-- Code Panel -->
     <aside id="codePanel" class="code-panel">
       <div class="code-header">
         <div class="code-header-top">
           <h3>&#128196; Kod</h3>
-          <button class="code-panel-toggle" id="codePanelToggle" title="Paneli ac/kapat (Ctrl+J)">&#10005;</button>
+          <button class="code-panel-toggle" id="codePanelToggle" title="Paneli kapat (Ctrl+J)">&#10005;</button>
         </div>
         <div class="code-tabs" id="codeTabs"></div>
       </div>

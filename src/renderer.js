@@ -8,8 +8,168 @@ const state = {
   workingDir: null,
   currentResponse: '',
   theme: 'dark',
-  templates: []
+  templates: [],
+  // Chat tabs
+  chatTabs: [],
+  activeChatTab: 0
 };
+
+function createChatTab(name) {
+  const id = Date.now();
+  const tabNum = state.chatTabs.length + 1;
+  const label = name || `Sohbet ${tabNum}`;
+  const tab = {
+    id,
+    label,
+    tabNum,
+    messages: [],
+    codeBlocks: [],
+    activeCodeTab: 0,
+    scrollPos: 0
+  };
+  state.chatTabs.push(tab);
+  return tab;
+}
+
+function saveCurrentTabState() {
+  const tab = state.chatTabs[state.activeChatTab];
+  if (!tab) return;
+  tab.messages = [...state.messages];
+  tab.codeBlocks = [...state.codeBlocks];
+  tab.activeCodeTab = state.activeCodeTab;
+  tab.scrollPos = chatMessages.scrollTop;
+}
+
+function loadTabState(index) {
+  const tab = state.chatTabs[index];
+  if (!tab) return;
+  state.messages = [...tab.messages];
+  state.codeBlocks = [...tab.codeBlocks];
+  state.activeCodeTab = tab.activeCodeTab;
+}
+
+function switchToTab(index) {
+  if (index === state.activeChatTab && state.chatTabs.length > 0) return;
+  saveCurrentTabState();
+  state.activeChatTab = index;
+  loadTabState(index);
+
+  // Re-render chat
+  chatMessages.innerHTML = '';
+  state.messages.forEach(m => {
+    renderMessageToDOM(m.role, m.text, m.images);
+  });
+  if (state.messages.length === 0) showWelcome();
+
+  // Restore scroll
+  chatMessages.scrollTop = state.chatTabs[index]?.scrollPos || 0;
+
+  // Re-render code panel
+  renderCodePanel();
+  renderChatTabs();
+}
+
+function renderChatTabs() {
+  const list = $('#chatTabsList');
+  list.innerHTML = state.chatTabs.map((tab, i) => `
+    <div class="chat-tab-item ${i === state.activeChatTab ? 'active' : ''}" data-index="${i}">
+      <span class="tab-label" title="${tab.label}">${tab.label}</span>
+      <span class="tab-close" data-index="${i}">&times;</span>
+    </div>
+  `).join('') + '<button class="chat-tab-add" id="addChatTabInline" title="Yeni sohbet (Ctrl+N)">+</button>';
+
+  list.querySelectorAll('.chat-tab-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      if (e.target.classList.contains('tab-close')) return;
+      switchToTab(parseInt(item.dataset.index));
+    });
+  });
+
+  list.querySelectorAll('.tab-close').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeChatTab(parseInt(btn.dataset.index));
+    });
+  });
+
+  // + button inside the tab list
+  const addBtn = list.querySelector('#addChatTabInline');
+  if (addBtn) addBtn.onclick = () => $('#addChatTab')?.click() || addNewChatTab();
+}
+
+function closeChatTab(index) {
+  // Auto-save before closing
+  saveCurrentTabState();
+  const closedTab = state.chatTabs[index];
+  if (closedTab.messages.length > 0) {
+    autoSaveTabSession(closedTab);
+  }
+
+  state.chatTabs.splice(index, 1);
+
+  // If no tabs left, create a fresh one
+  if (state.chatTabs.length === 0) {
+    createChatTab();
+    state.activeChatTab = 0;
+  } else if (state.activeChatTab >= state.chatTabs.length) {
+    state.activeChatTab = state.chatTabs.length - 1;
+  } else if (index < state.activeChatTab) {
+    state.activeChatTab--;
+  }
+
+  loadTabState(state.activeChatTab);
+  chatMessages.innerHTML = '';
+  state.messages.forEach(m => renderMessageToDOM(m.role, m.text, m.images));
+  if (state.messages.length === 0) showWelcome();
+  renderCodePanel();
+  renderChatTabs();
+}
+
+// Detect topic from conversation content
+function detectTopic(text) {
+  const t = text.toLowerCase();
+  const topics = [
+    { keys: ['cauldroncrush', 'brewburst', 'unity', 'puzzle', 'oyun', 'level', 'iksir', 'admob', 'google play', '.aab'], label: 'CauldronCrush' },
+    { keys: ['vitalboost', 'scansense', 'mediscribe', 'sağlık', 'saglik', 'ilaç', 'ilac', 'reçete', 'recete', 'medikal'], label: 'VitalBoost' },
+    { keys: ['kozmetify', 'fiyatradari', 'fiyat karşılaştırma', 'kozmetik', 'trendyol', 'gratis'], label: 'Kozmetify' },
+    { keys: ['masal', 'hikaye', 'fıkra', 'sesli okuma'], label: 'Masal App' },
+    { keys: ['comfyui', 'workflow', 'controlnet', 'lora', 'ksampler', 'gguf'], label: 'ComfyUI' },
+    { keys: ['claude ui', 'electron', 'arayüz', 'wrapper', 'panel'], label: 'Claude UI' },
+    { keys: ['github', 'git push', 'repo', 'commit'], label: 'Git/GitHub' },
+    { keys: ['expo', 'react native', 'supabase'], label: 'Mobil Geliştirme' },
+  ];
+  for (const { keys, label } of topics) {
+    for (const k of keys) {
+      if (t.includes(k)) return label;
+    }
+  }
+  return null;
+}
+
+function updateTabLabel() {
+  const tab = state.chatTabs[state.activeChatTab];
+  if (!tab || tab.labelUpdated) return;
+
+  // Collect all text so far
+  const allText = state.messages.map(m => m.text || '').join(' ');
+  const topic = detectTopic(allText);
+
+  if (topic) {
+    tab.label = topic + (tab.tabNum > 1 ? ` (t${tab.tabNum})` : '');
+    tab.labelUpdated = true;
+    renderChatTabs();
+  } else if (state.messages.length >= 2) {
+    // Fallback: use first meaningful user message
+    const firstUser = state.messages.find(m => m.role === 'user');
+    if (firstUser && firstUser.text) {
+      const cleaned = firstUser.text.replace(/^(merhaba|günaydın|selam|hey|hi|hello|claude)\s*/gi, '').trim();
+      const label = cleaned.length > 5 ? cleaned.substring(0, 25) : firstUser.text.substring(0, 25);
+      tab.label = label.replace(/\n/g, ' ') + (tab.tabNum > 1 ? ` (t${tab.tabNum})` : '');
+      tab.labelUpdated = true;
+      renderChatTabs();
+    }
+  }
+}
 
 // ===== DOM Elements =====
 const $ = (sel) => document.querySelector(sel);
@@ -34,7 +194,15 @@ $('#btnClose').onclick = () => window.claude.close();
 $('#sidebarToggle').onclick = () => $('#sidebar').classList.toggle('collapsed');
 
 // ===== Code Panel Toggle =====
-$('#codePanelToggle').onclick = () => $('#codePanel').classList.toggle('collapsed');
+function toggleCodePanel() {
+  const panel = $('#codePanel');
+  const reopen = $('#codePanelReopen');
+  panel.classList.toggle('collapsed');
+  const isCollapsed = panel.classList.contains('collapsed');
+  reopen.style.display = isCollapsed ? 'flex' : 'none';
+}
+$('#codePanelToggle').onclick = toggleCodePanel;
+$('#codePanelReopen').onclick = toggleCodePanel;
 
 // ===== Theme Toggle =====
 $('#btnTheme').onclick = toggleTheme;
@@ -109,13 +277,29 @@ document.addEventListener('keydown', (e) => {
   // Ctrl+B - Toggle sidebar
   if (e.ctrlKey && e.key === 'b') { e.preventDefault(); $('#sidebar').classList.toggle('collapsed'); }
   // Ctrl+J - Toggle code panel
-  if (e.ctrlKey && e.key === 'j') { e.preventDefault(); $('#codePanel').classList.toggle('collapsed'); }
+  if (e.ctrlKey && e.key === 'j') { e.preventDefault(); toggleCodePanel(); }
   // Ctrl+T - Toggle theme
   if (e.ctrlKey && e.key === 't') { e.preventDefault(); toggleTheme(); }
   // Ctrl+Shift+S - Save session
   if (e.ctrlKey && e.shiftKey && e.key === 'S') { e.preventDefault(); autoSaveSession(); showToast('Session kaydedildi'); }
   // Ctrl+Shift+E - Export
   if (e.ctrlKey && e.shiftKey && e.key === 'E') { e.preventDefault(); exportSession(); }
+  // Ctrl+N - New chat tab
+  if (e.ctrlKey && e.key === 'n') { e.preventDefault(); addNewChatTab(); }
+  // Ctrl+W - Close current tab
+  if (e.ctrlKey && e.key === 'w') { e.preventDefault(); closeChatTab(state.activeChatTab); }
+  // Ctrl+Tab - Next tab
+  if (e.ctrlKey && e.key === 'Tab' && !e.shiftKey) {
+    e.preventDefault();
+    const next = (state.activeChatTab + 1) % state.chatTabs.length;
+    switchToTab(next);
+  }
+  // Ctrl+Shift+Tab - Previous tab
+  if (e.ctrlKey && e.key === 'Tab' && e.shiftKey) {
+    e.preventDefault();
+    const prev = (state.activeChatTab - 1 + state.chatTabs.length) % state.chatTabs.length;
+    switchToTab(prev);
+  }
 });
 
 // ===== Resize Handles =====
@@ -402,6 +586,7 @@ async function sendMessage() {
 window.claude.onStream((chunk) => {
   state.currentResponse += chunk;
   updateStreamingMessage(state.currentResponse);
+  updateStreamingCodePanel(state.currentResponse);
 });
 
 function updateStreamingMessage(content) {
@@ -412,8 +597,71 @@ function updateStreamingMessage(content) {
     streamMsg.className = 'message assistant streaming';
     chatMessages.appendChild(streamMsg);
   }
-  streamMsg.innerHTML = formatMarkdown(content);
+  // In chat, show text but replace active code blocks with a one-line reference
+  const chatContent = content.replace(
+    /```(\w*)\n([\s\S]*?)```/g,
+    (match, lang) => `<div style="padding:4px 10px;background:var(--bg-tertiary);border-radius:4px;font-size:11px;color:var(--accent);margin:6px 0;cursor:pointer;" class="code-ref">🟢 Kod yaziliyor → Kod panelinde goruntuluyor (${lang || 'code'})</div>`
+  );
+  // If there's an unclosed code block, show reference for it too
+  const unclosedMatch = content.match(/```(\w*)\n([^`]*)$/);
+  let displayContent = chatContent;
+  if (unclosedMatch) {
+    displayContent = chatContent.replace(
+      /```(\w*)\n([^`]*)$/,
+      `<div style="padding:4px 10px;background:var(--bg-tertiary);border-radius:4px;font-size:11px;color:var(--warning);margin:6px 0;">🟡 Kod yaziliyor... → Kod panelinde canli (${unclosedMatch[1] || 'code'})</div>`
+    );
+  }
+  streamMsg.innerHTML = formatMarkdown(displayContent.replace(/```(\w*)\n([\s\S]*?)$/g, ''));
   chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Live code streaming in code panel
+let streamingCodeLang = '';
+function updateStreamingCodePanel(content) {
+  // Find all complete code blocks
+  const completeBlocks = [...content.matchAll(/```(\w*)\n([\s\S]*?)```/g)];
+
+  // Find unclosed (currently writing) code block
+  const unclosedMatch = content.match(/```(\w*)\n([^`]*)$/);
+
+  if (unclosedMatch) {
+    // Code is being written RIGHT NOW
+    const lang = unclosedMatch[1] || 'code';
+    const code = unclosedMatch[2];
+    streamingCodeLang = lang;
+
+    // Ensure code panel is visible
+    $('#codePanel').classList.remove('collapsed');
+
+    // Show live code
+    codeContent.innerHTML = `
+      <div class="code-block">
+        <div class="code-block-header">
+          <span class="code-block-lang">${lang}</span>
+          <span style="color:var(--warning);font-size:10px;">● Yaziliyor...</span>
+        </div>
+        <pre style="min-height:100px;">${escapeHtml(code)}<span style="animation:pulse 0.8s infinite;color:var(--accent);">|</span></pre>
+      </div>
+    `;
+
+    // Auto-scroll code panel to bottom
+    codeContent.scrollTop = codeContent.scrollHeight;
+  } else if (completeBlocks.length > 0) {
+    // Code block just completed — finalize in code panel
+    const lastBlock = completeBlocks[completeBlocks.length - 1];
+    const lang = lastBlock[1] || 'text';
+    const code = lastBlock[2].trim();
+
+    // Check if we already have this exact block
+    const exists = state.codeBlocks.some(b => b.code === code && b.lang === lang);
+    if (!exists && streamingCodeLang) {
+      state.codeBlocks.push({ lang, code, id: state.codeBlocks.length });
+      state.activeCodeTab = state.codeBlocks.length - 1;
+      streamingCodeLang = '';
+    }
+
+    renderCodePanel();
+  }
 }
 
 // ===== Agent Log =====
@@ -447,13 +695,12 @@ function addAgentLogEntry(text) {
 }
 
 // ===== Messages =====
-function addMessage(role, text, images) {
+// Render-only (no state push) — used when restoring tabs
+function renderMessageToDOM(role, text, images) {
   const msg = document.createElement('div');
   msg.className = `message ${role}`;
-
   let html = '';
 
-  // Assistant messages get dot indicator
   if (role === 'assistant' && text) {
     const hasCode = /```\w*\n[\s\S]*?```/.test(text);
     if (hasCode) {
@@ -473,22 +720,16 @@ function addMessage(role, text, images) {
 
   msg.innerHTML = html;
   chatMessages.appendChild(msg);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
 
-  // Click-to-send code blocks to code panel
   if (role === 'assistant') {
-    const hasCodeBlocks = msg.querySelectorAll('pre').length > 0;
-
-    msg.querySelectorAll('pre').forEach((pre, preIdx) => {
+    msg.querySelectorAll('pre').forEach(pre => {
       pre.addEventListener('click', (e) => {
         e.stopPropagation();
         const codeEl = pre.querySelector('code');
         const code = codeEl ? codeEl.textContent : pre.textContent;
         const langMatch = codeEl?.className?.match(/lang-(\w+)/);
         const lang = langMatch ? langMatch[1] : 'text';
-
         $('#codePanel').classList.remove('collapsed');
-
         state.codeBlocks.push({ lang, code, id: state.codeBlocks.length });
         state.activeCodeTab = state.codeBlocks.length - 1;
         renderCodePanel();
@@ -496,12 +737,8 @@ function addMessage(role, text, images) {
       });
     });
 
-    // Click on message body (not pre) jumps to related code in panel
-    if (hasCodeBlocks) {
+    if (msg.querySelectorAll('pre').length > 0) {
       msg.addEventListener('click', () => {
-        // Find related code blocks that were extracted from this message
-        const msgIdx = state.messages.length; // current message index
-        // Jump to the latest code block
         if (state.codeBlocks.length > 0) {
           $('#codePanel').classList.remove('collapsed');
           state.activeCodeTab = state.codeBlocks.length - 1;
@@ -511,7 +748,14 @@ function addMessage(role, text, images) {
     }
   }
 
+  return msg;
+}
+
+function addMessage(role, text, images) {
+  renderMessageToDOM(role, text, images);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
   state.messages.push({ role, text, images: images || [], timestamp: Date.now() });
+  updateTabLabel();
 }
 
 function showTyping() {
@@ -590,13 +834,28 @@ function renderCodePanel() {
 
   codeTabs.innerHTML = state.codeBlocks.map((block, i) => `
     <button class="code-tab ${i === state.activeCodeTab ? 'active' : ''}" data-index="${i}">
-      ${block.lang} #${i + 1}
+      <span>${block.lang} #${i + 1}</span>
+      <span class="code-tab-close" data-index="${i}">&times;</span>
     </button>
   `).join('');
 
   codeTabs.querySelectorAll('.code-tab').forEach(tab => {
-    tab.onclick = () => {
+    tab.onclick = (e) => {
+      if (e.target.classList.contains('code-tab-close')) return;
       state.activeCodeTab = parseInt(tab.dataset.index);
+      renderCodePanel();
+    };
+  });
+
+  // Code tab close buttons
+  codeTabs.querySelectorAll('.code-tab-close').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.index);
+      state.codeBlocks.splice(idx, 1);
+      if (state.activeCodeTab >= state.codeBlocks.length) {
+        state.activeCodeTab = Math.max(0, state.codeBlocks.length - 1);
+      }
       renderCodePanel();
     };
   });
@@ -697,20 +956,42 @@ sessionSearch.addEventListener('input', async () => {
 
 async function autoSaveSession() {
   if (state.messages.length < 2) return;
+  const tab = state.chatTabs[state.activeChatTab];
+  await autoSaveTabSession(tab || { messages: state.messages, codeBlocks: state.codeBlocks, tabNum: 1 });
+}
+
+async function autoSaveTabSession(tab) {
+  const msgs = tab.messages || state.messages;
+  const codes = tab.codeBlocks || state.codeBlocks;
+  if (msgs.length < 2) return;
 
   const today = new Date().toISOString().split('T')[0];
-  const firstUserMsg = state.messages.find(m => m.role === 'user')?.text || 'session';
-  const titleSlug = firstUserMsg.substring(0, 40).replace(/[^a-zA-Z0-9\u00C0-\u024F\u0400-\u04FF]/g, '_').toLowerCase();
-  const filename = `${today}_${titleSlug}.md`;
+  const allText = msgs.map(m => m.text || '').join(' ');
+  const topic = detectTopic(allText);
 
-  const content = generateSessionMarkdown();
+  let titleSlug;
+  if (topic) {
+    titleSlug = topic.toLowerCase().replace(/[^a-z0-9]/g, '_');
+  } else {
+    const firstUserMsg = msgs.find(m => m.role === 'user')?.text || 'session';
+    const cleaned = firstUserMsg.replace(/^(merhaba|günaydın|selam|hey|claude)\s*/gi, '').trim();
+    titleSlug = (cleaned.length > 5 ? cleaned : firstUserMsg).substring(0, 40).replace(/[^a-zA-Z0-9\u00C0-\u024F\u0400-\u04FFğüşıöçĞÜŞİÖÇ]/g, '_').toLowerCase();
+  }
+  const tabSuffix = (tab.tabNum && tab.tabNum > 1) ? `_t${tab.tabNum}` : '';
+  const filename = `${today}_${titleSlug}${tabSuffix}.md`;
+
+  const content = generateSessionMarkdownFor(msgs, codes);
   await window.claude.saveSession(filename, content);
   await loadSessions();
 }
 
 function generateSessionMarkdown() {
+  return generateSessionMarkdownFor(state.messages, state.codeBlocks);
+}
+
+function generateSessionMarkdownFor(msgs, codes) {
   const now = new Date();
-  const firstMsg = state.messages.find(m => m.role === 'user')?.text || 'Session';
+  const firstMsg = msgs.find(m => m.role === 'user')?.text || 'Session';
   const title = firstMsg.substring(0, 60);
 
   let md = `# ${title}\n\n`;
@@ -720,24 +1001,25 @@ function generateSessionMarkdown() {
   md += `\n---\n\n`;
 
   md += `## Diyalog\n\n`;
-  state.messages.forEach((m, i) => {
+  let codeIdx = 0;
+  msgs.forEach((m, i) => {
     const ts = new Date(m.timestamp).toLocaleTimeString('tr-TR');
     if (m.role === 'user') {
       md += `### Kullanici (${ts})\n`;
       md += `${m.text}\n\n`;
     } else {
-      // Claude response - mark with dot type
       const hasCode = /```\w*\n[\s\S]*?```/.test(m.text || '');
       const dot = hasCode ? '🟢' : '⚪';
-      const codeRef = hasCode ? ` → [Kod #${state.codeBlocks.length}]` : '';
+      if (hasCode) codeIdx++;
+      const codeRef = hasCode ? ` → [Kod #${codeIdx}]` : '';
       md += `### ${dot} Claude (${ts})${codeRef}\n`;
       md += `${m.text}\n\n`;
     }
   });
 
-  if (state.codeBlocks.length > 0) {
+  if (codes && codes.length > 0) {
     md += `## Kodlar\n\n`;
-    state.codeBlocks.forEach((block, i) => {
+    codes.forEach((block, i) => {
       md += `### ${block.lang} #${i + 1}\n`;
       md += `\`\`\`${block.lang}\n${block.code}\n\`\`\`\n\n`;
     });
@@ -840,9 +1122,30 @@ async function checkAndRunSetup() {
   });
 }
 
+// ===== Chat Tab Events =====
+function addNewChatTab() {
+  saveCurrentTabState();
+  createChatTab();
+  state.activeChatTab = state.chatTabs.length - 1;
+  state.messages = [];
+  state.codeBlocks = [];
+  state.activeCodeTab = 0;
+  chatMessages.innerHTML = '';
+  showWelcome();
+  renderCodePanel();
+  renderChatTabs();
+  chatInput.focus();
+  showToast('Yeni sohbet acildi');
+}
+
 // ===== Init =====
 async function init() {
   await checkAndRunSetup();
+
+  // Create first tab
+  createChatTab();
+  renderChatTabs();
+
   showWelcome();
   await loadSessions();
   chatInput.focus();

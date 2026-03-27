@@ -177,6 +177,49 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
   background: var(--bg-primary);
 }
 
+/* Chat Tabs */
+.chat-tabs-bar {
+  display: flex; align-items: center; background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border); padding: 0 4px;
+  min-height: 32px; overflow: hidden;
+}
+.chat-tabs-list {
+  display: flex; gap: 2px; overflow-x: auto; flex: 1; padding: 4px 0;
+}
+.chat-tabs-list::-webkit-scrollbar { height: 0; }
+
+.chat-tab-item {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 10px; font-size: 11px; border-radius: var(--radius-sm);
+  background: var(--bg-tertiary); color: var(--text-secondary);
+  cursor: pointer; white-space: nowrap; border: 1px solid transparent;
+  transition: all 0.15s; max-width: 180px; position: relative;
+}
+.chat-tab-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.chat-tab-item.active {
+  background: var(--accent-dim); color: var(--accent);
+  border-color: var(--accent);
+}
+.chat-tab-item .tab-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-tab-item .tab-close {
+  font-size: 12px; color: var(--text-muted); cursor: pointer;
+  padding: 0 2px; border-radius: 2px; line-height: 1;
+  opacity: 0.5; transition: opacity 0.15s;
+}
+.chat-tab-item:hover .tab-close { opacity: 1; }
+.chat-tab-item .tab-close:hover { color: var(--error); }
+
+.chat-tab-add {
+  width: 22px; height: 22px; border: 1px dashed var(--border);
+  background: transparent; color: var(--text-muted); font-size: 13px;
+  cursor: pointer; border-radius: var(--radius-sm); flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all 0.15s; vertical-align: middle;
+}
+.chat-tab-add:hover { color: var(--accent); border-color: var(--accent); }
+
 .chat-messages {
   flex: 1; overflow-y: auto; padding: 16px; display: flex;
   flex-direction: column; gap: 12px;
@@ -306,15 +349,24 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
 
 /* ===== Code Panel ===== */
 .code-panel {
-  width: var(--code-panel-width); background: var(--bg-secondary);
-  border-left: 1px solid var(--border); display: flex; flex-direction: column;
+  width: var(--code-panel-width); background: #000000;
+  border-left: 1px solid #1a1a1a; display: flex; flex-direction: column;
   overflow: hidden; transition: width 0.25s ease;
 }
-.code-panel.collapsed { width: 0; min-width: 0; border: none; }
-.code-panel.collapsed * { display: none; }
+.code-panel.collapsed { width: 0; min-width: 0; border: none; overflow: hidden; }
+.code-panel.collapsed * { visibility: hidden; }
+
+/* Reopen button when code panel is collapsed */
+.code-panel-reopen {
+  width: 32px; background: var(--bg-secondary); border-left: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; color: var(--text-muted); font-size: 16px;
+  transition: all 0.15s; flex-shrink: 0; writing-mode: vertical-rl;
+}
+.code-panel-reopen:hover { color: var(--accent); background: var(--accent-dim); }
 
 .code-header {
-  padding: 10px 12px; border-bottom: 1px solid var(--border);
+  padding: 10px 12px; border-bottom: 1px solid #1a1a1a; background: #000000;
 }
 .code-header-top {
   display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;
@@ -331,27 +383,34 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
   display: flex; gap: 4px; overflow-x: auto; padding-bottom: 2px;
 }
 .code-tab {
-  padding: 4px 10px; font-size: 11px; border-radius: var(--radius-sm);
+  padding: 4px 8px; font-size: 11px; border-radius: var(--radius-sm);
   background: var(--bg-tertiary); color: var(--text-secondary);
   cursor: pointer; white-space: nowrap; border: none; transition: all 0.15s;
+  display: inline-flex; align-items: center; gap: 6px;
 }
 .code-tab:hover { background: var(--bg-hover); color: var(--text-primary); }
 .code-tab.active { background: var(--accent-dim); color: var(--accent); }
+.code-tab .code-tab-close {
+  font-size: 11px; color: var(--text-muted); cursor: pointer;
+  padding: 0 2px; line-height: 1; opacity: 0.5; transition: opacity 0.15s;
+}
+.code-tab:hover .code-tab-close { opacity: 1; }
+.code-tab .code-tab-close:hover { color: var(--error); }
 
 .code-content {
-  flex: 1; overflow: auto; padding: 12px;
+  flex: 1; overflow: auto; padding: 12px; background: #000000;
 }
 .code-placeholder {
-  color: var(--text-muted); font-size: 13px; text-align: center;
+  color: #333333; font-size: 13px; text-align: center;
   padding-top: 40px;
 }
 .code-block {
-  background: var(--code-bg); border-radius: var(--radius-sm);
+  background: #000000; border-radius: var(--radius-sm);
   margin-bottom: 12px; overflow: hidden;
 }
 .code-block-header {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 6px 10px; background: var(--bg-tertiary); font-size: 11px;
+  padding: 6px 10px; background: #111111; font-size: 11px;
 }
 .code-block-lang { color: var(--accent); font-weight: 600; }
 .code-block-copy {
@@ -362,9 +421,11 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
 .code-block-copy:hover { border-color: var(--accent); color: var(--accent); }
 .code-block-copy.copied { border-color: var(--success); color: var(--success); }
 .code-block pre {
-  padding: 10px; margin: 0; overflow-x: auto;
+  padding: 10px; margin: 0; overflow-x: hidden; overflow-y: auto;
   font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
   font-size: 12.5px; line-height: 1.5; color: var(--text-primary);
+  white-space: pre-wrap; word-wrap: break-word;
+  background: #000000;
 }
 
 /* ===== Help Modal ===== */
