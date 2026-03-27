@@ -27,7 +27,9 @@ contextBridge.exposeInMainWorld('claude', {
   getSessions: () => ipcRenderer.invoke('get-sessions'),
   loadSession: (filename, subdir) => ipcRenderer.invoke('load-session', filename, subdir),
   saveSession: (filename, content) => ipcRenderer.invoke('save-session', filename, content),
+  saveSessionSync: (filename, content) => ipcRenderer.sendSync('save-session-sync', filename, content),
   searchHistory: (query) => ipcRenderer.invoke('search-history', query),
+  syncTerminalSessions: (opts) => ipcRenderer.invoke('sync-terminal-sessions', opts),
 
   // Images
   saveTempImage: (base64) => ipcRenderer.invoke('save-temp-image', base64),

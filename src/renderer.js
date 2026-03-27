@@ -134,16 +134,22 @@ function detectTopic(text) {
     { keys: ['kozmetify', 'fiyatradari', 'fiyat karşılaştırma', 'kozmetik', 'trendyol', 'gratis'], label: 'Kozmetify' },
     { keys: ['masal', 'hikaye', 'fıkra', 'sesli okuma'], label: 'Masal App' },
     { keys: ['comfyui', 'workflow', 'controlnet', 'lora', 'ksampler', 'gguf'], label: 'ComfyUI' },
-    { keys: ['claude ui', 'electron', 'arayüz', 'wrapper', 'panel'], label: 'Claude UI' },
+    { keys: ['claude ui', 'electron', 'arayüz', 'wrapper', 'panel', 'titlebar', 'session panel'], label: 'Claude UI' },
     { keys: ['github', 'git push', 'repo', 'commit'], label: 'Git/GitHub' },
     { keys: ['expo', 'react native', 'supabase'], label: 'Mobil Geliştirme' },
   ];
+  // Skor bazli: en cok eslesen konu kazanir
+  let bestLabel = null, bestScore = 0;
   for (const { keys, label } of topics) {
+    let score = 0;
     for (const k of keys) {
-      if (t.includes(k)) return label;
+      const regex = new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+      const matches = t.match(regex);
+      if (matches) score += matches.length;
     }
+    if (score > bestScore) { bestScore = score; bestLabel = label; }
   }
-  return null;
+  return bestLabel;
 }
 
 function updateTabLabel() {
@@ -226,6 +232,24 @@ if (savedTheme) {
 $('#btnHelp').onclick = () => helpModal.style.display = 'flex';
 $('#helpClose').onclick = () => helpModal.style.display = 'none';
 helpModal.onclick = (e) => { if (e.target === helpModal) helpModal.style.display = 'none'; };
+
+// ===== Terminal Sync Button =====
+$('#btnSyncTerminal').onclick = async () => {
+  const btn = $('#btnSyncTerminal');
+  btn.classList.add('syncing');
+  try {
+    const result = await window.claude.syncTerminalSessions({ force: false });
+    if (result.synced > 0) {
+      showToast(`${result.synced} terminal oturumu sync edildi`);
+      await loadSessions();
+    } else {
+      showToast('Yeni terminal oturumu yok');
+    }
+  } catch (e) {
+    showToast('Sync hatasi: ' + e.message);
+  }
+  btn.classList.remove('syncing');
+};
 
 // ===== Export =====
 $('#btnExport').onclick = exportSession;
@@ -893,12 +917,15 @@ async function loadSessions() {
 function renderSessionList(sessions) {
   sessionList.innerHTML = sessions.length === 0
     ? '<div style="color:var(--text-muted);font-size:12px;padding:8px;">Henuz gecmis yok</div>'
-    : sessions.map(s => `
+    : sessions.map(s => {
+      const isCli = s.filename.endsWith('_cli.md');
+      const sourceTag = isCli ? '<span class="session-item-source">CLI</span>' : '';
+      return `
       <div class="session-item" data-file="${s.filename}" data-subdir="${s.subdir || ''}" title="${s.title}">
-        <div class="session-item-title">${escapeHtml(s.title)}</div>
+        <div class="session-item-title">${escapeHtml(s.title)}${sourceTag}</div>
         <div class="session-item-date">${s.date}${s.subdir ? ' &middot; ' + s.subdir : ''}</div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
 
   sessionList.querySelectorAll('.session-item').forEach(item => {
     item.onclick = async () => {
@@ -966,8 +993,8 @@ async function autoSaveTabSession(tab) {
   if (msgs.length < 2) return;
 
   const today = new Date().toISOString().split('T')[0];
-  const allText = msgs.map(m => m.text || '').join(' ');
-  const topic = detectTopic(allText);
+  const topicText = msgs.slice(0, 20).map(m => m.text || '').join(' ');
+  const topic = detectTopic(topicText);
 
   let titleSlug;
   if (topic) {
@@ -992,26 +1019,40 @@ function generateSessionMarkdown() {
 function generateSessionMarkdownFor(msgs, codes) {
   const now = new Date();
   const firstMsg = msgs.find(m => m.role === 'user')?.text || 'Session';
-  const title = firstMsg.substring(0, 60);
+  const title = firstMsg.substring(0, 80).replace(/\n/g, ' ');
+
+  // Baslangic-bitis saat araligi
+  const firstTime = msgs[0]?.timestamp ? new Date(msgs[0].timestamp) : now;
+  const lastTime = msgs[msgs.length - 1]?.timestamp ? new Date(msgs[msgs.length - 1].timestamp) : now;
+  const startStr = firstTime.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  const endStr = lastTime.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  const timeRange = startStr === endStr ? startStr : `${startStr} - ${endStr}`;
+
+  const userCount = msgs.filter(m => m.role === 'user').length;
+  const assistantCount = msgs.filter(m => m.role === 'assistant').length;
 
   let md = `# ${title}\n\n`;
   md += `**Tarih:** ${now.toISOString().split('T')[0]}\n`;
-  md += `**Saat:** ${now.toLocaleTimeString('tr-TR')}\n`;
+  md += `**Saat:** ${timeRange}\n`;
+  md += `**Kaynak:** Claude UI\n`;
+  md += `**Mesaj:** ${userCount} kullanici, ${assistantCount} asistan\n`;
   if (state.workingDir) md += `**Dizin:** ${state.workingDir}\n`;
   md += `\n---\n\n`;
 
   md += `## Diyalog\n\n`;
   let codeIdx = 0;
   msgs.forEach((m, i) => {
-    const ts = new Date(m.timestamp).toLocaleTimeString('tr-TR');
+    const ts = m.timestamp
+      ? new Date(m.timestamp).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      : '';
     if (m.role === 'user') {
       md += `### Kullanici (${ts})\n`;
       md += `${m.text}\n\n`;
     } else {
       const hasCode = /```\w*\n[\s\S]*?```/.test(m.text || '');
-      const dot = hasCode ? '🟢' : '⚪';
+      const dot = hasCode ? '\u{1F7E2}' : '\u26AA';
       if (hasCode) codeIdx++;
-      const codeRef = hasCode ? ` → [Kod #${codeIdx}]` : '';
+      const codeRef = hasCode ? ` \u2192 [Kod #${codeIdx}]` : '';
       md += `### ${dot} Claude (${ts})${codeRef}\n`;
       md += `${m.text}\n\n`;
     }
@@ -1147,8 +1188,51 @@ async function init() {
   renderChatTabs();
 
   showWelcome();
+
+  // Acilista terminal oturumlarini sync et
+  try {
+    const syncResult = await window.claude.syncTerminalSessions();
+    if (syncResult.synced > 0) {
+      showToast(`${syncResult.synced} terminal oturumu sync edildi`);
+    }
+  } catch (e) { console.error('Terminal sync hatasi:', e); }
+
   await loadSessions();
   chatInput.focus();
+
+  // Periyodik auto-save: her 2 dakikada bir (mesaj varsa)
+  setInterval(() => {
+    if (state.messages.length >= 2) {
+      autoSaveSession();
+    }
+  }, 2 * 60 * 1000);
+
+  // Uygulama kapanirken tum tab'lari kaydet
+  window.addEventListener('beforeunload', (e) => {
+    const tabsToSave = state.chatTabs.filter(tab => tab.messages && tab.messages.length >= 2);
+    if (tabsToSave.length > 0) {
+      // Senkron IPC ile kaydet (beforeunload'da async calismaz)
+      for (const tab of tabsToSave) {
+        const msgs = tab.messages || [];
+        const codes = tab.codeBlocks || [];
+        const content = generateSessionMarkdownFor(msgs, codes);
+
+        const today = new Date().toISOString().split('T')[0];
+        const topicText = msgs.slice(0, 20).map(m => m.text || '').join(' ');
+        const topic = detectTopic(topicText);
+        let slug;
+        if (topic) {
+          slug = topic.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        } else {
+          const firstUserMsg = msgs.find(m => m.role === 'user')?.text || 'session';
+          slug = firstUserMsg.substring(0, 40).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+        }
+        const tabSuffix = (tab.tabNum && tab.tabNum > 1) ? `_t${tab.tabNum}` : '';
+        const filename = `${today}_${slug}${tabSuffix}.md`;
+        window.claude.saveSessionSync(filename, content);
+      }
+    }
+  });
 }
 
 init();

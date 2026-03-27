@@ -137,6 +137,23 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
 }
 .session-search input:focus { border-color: var(--accent); }
 
+.session-search {
+  display: flex; gap: 4px; align-items: center;
+}
+.session-search input { flex: 1; }
+.sync-btn {
+  padding: 4px 6px; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); cursor: pointer; font-size: 14px; line-height: 1;
+  color: var(--text-muted); transition: all 0.2s;
+}
+.sync-btn:hover { border-color: var(--accent); color: var(--accent); }
+.sync-btn.syncing { animation: spin 1s linear infinite; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+.session-item-source {
+  font-size: 9px; color: var(--accent); opacity: 0.7; margin-left: 4px;
+}
+
 .session-list { flex: 1; overflow-y: auto; margin-top: 6px; }
 .session-item {
   padding: 8px; border-radius: var(--radius-sm); cursor: pointer;

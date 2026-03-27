@@ -274,6 +274,18 @@ ipcMain.handle('save-session', async (event, filename, content) => {
   return true;
 });
 
+// Senkron versiyon (beforeunload icin)
+ipcMain.on('save-session-sync', (event, filename, content) => {
+  try {
+    const sessionsDir = path.join(getHistoryDir(), 'sessions');
+    if (!fs.existsSync(sessionsDir)) fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir, filename), content, 'utf-8');
+    event.returnValue = true;
+  } catch (e) {
+    event.returnValue = false;
+  }
+});
+
 // ---- IPC: Search across sessions and projects ----
 ipcMain.handle('search-history', async (event, query) => {
   const histDir = getHistoryDir();
@@ -316,6 +328,169 @@ ipcMain.handle('search-history', async (event, query) => {
 
   searchDir(histDir, '');
   return results.slice(0, 50);
+});
+
+// ---- IPC: Terminal Session Sync ----
+function syncTerminalSessions(opts = {}) {
+  const os = require('os');
+  const claudeDir = path.join(os.homedir(), '.claude');
+  const projectsDir = path.join(claudeDir, 'projects');
+  const sessionsDir = path.join(getHistoryDir(), 'sessions');
+
+  if (!fs.existsSync(projectsDir)) return { synced: 0, skipped: 0, errors: [] };
+  if (!fs.existsSync(sessionsDir)) fs.mkdirSync(sessionsDir, { recursive: true });
+
+  const TOPIC_MAP = {
+    'cauldroncrush': /cauldroncrush|brewburst|cauldron|puzzle|level|oyun|game/i,
+    'vitalboost': /vitalboost|scansense|mediscribe|saglik|health|ilac|medikal/i,
+    'kozmetify': /kozmetify|fiyatradari|fiyat|kozmetik|cosmetic/i,
+    'claude_ui': /claude.?ui|electron|wrapper|panel|aray[uü]z|session.*panel|titlebar/i,
+    'comfyui': /comfyui|workflow|controlnet|lora|sampler|qwen.*image/i,
+    'masal': /masal|hikaye|story|tale|fikra/i,
+    'git_github': /github|git\s|commit|push|pull.*request|repo/i,
+    'ai_provider': /openrouter|groq|mistral|gemini|api.*key|provider|fallback/i,
+    'apple_ios': /apple|ios|xcode|testflight|duns|app.*store/i,
+    'wsl_build': /wsl|ubuntu|linux|aab.*build/i,
+  };
+
+  function detectTopic(text) {
+    let bestTopic = null, bestScore = 0;
+    for (const [topic, regex] of Object.entries(TOPIC_MAP)) {
+      const matches = text.match(new RegExp(regex.source, 'gi'));
+      const score = matches ? matches.length : 0;
+      if (score > bestScore) { bestScore = score; bestTopic = topic; }
+    }
+    return bestTopic;
+  }
+
+  function isAlreadySynced(sessionId) {
+    try {
+      const files = fs.readdirSync(sessionsDir).filter(f => f.endsWith('_cli.md'));
+      for (const f of files) {
+        const content = fs.readFileSync(path.join(sessionsDir, f), 'utf-8');
+        if (content.includes(`session:${sessionId}`)) return f;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  function parseConversation(jsonlPath) {
+    const content = fs.readFileSync(jsonlPath, 'utf-8');
+    const lines = content.trim().split('\n');
+    const messages = [];
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type === 'user') {
+          const text = typeof entry.message?.content === 'string'
+            ? entry.message.content
+            : Array.isArray(entry.message?.content)
+              ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join('\n')
+              : '';
+          if (text.trim()) messages.push({ role: 'user', text: text.trim(), timestamp: entry.timestamp });
+        } else if (entry.type === 'assistant' && entry.message?.content) {
+          const textParts = [];
+          const toolCalls = [];
+          for (const block of entry.message.content) {
+            if (block.type === 'text' && block.text?.trim()) textParts.push(block.text.trim());
+            else if (block.type === 'tool_use') toolCalls.push(block.name);
+          }
+          let text = textParts.join('\n\n');
+          if (toolCalls.length > 0 && !text) text = `[Araclar: ${[...new Set(toolCalls)].join(', ')}]`;
+          else if (toolCalls.length > 0) text += `\n\n_Araclar: ${[...new Set(toolCalls)].join(', ')}_`;
+          if (text.trim()) messages.push({ role: 'assistant', text: text.trim(), timestamp: entry.timestamp });
+        }
+      } catch (e) {}
+    }
+    return messages;
+  }
+
+  // Find conversations
+  const conversations = [];
+  const projectDirs = fs.readdirSync(projectsDir);
+  for (const projDir of projectDirs) {
+    const projPath = path.join(projectsDir, projDir);
+    if (!fs.statSync(projPath).isDirectory()) continue;
+    const files = fs.readdirSync(projPath).filter(f => f.endsWith('.jsonl'));
+    for (const file of files) {
+      const filePath = path.join(projPath, file);
+      const stat = fs.statSync(filePath);
+      if (stat.size < 1000) continue;
+      if (!opts.all) {
+        const today = new Date().toISOString().split('T')[0];
+        const fileDate = stat.mtime.toISOString().split('T')[0];
+        if (fileDate !== today) continue;
+      }
+      conversations.push({ path: filePath, sessionId: file.replace('.jsonl', ''), mtime: stat.mtime, size: stat.size });
+    }
+  }
+
+  let synced = 0, skipped = 0;
+  const errors = [];
+
+  for (const conv of conversations) {
+    if (!opts.force && isAlreadySynced(conv.sessionId)) { skipped++; continue; }
+    try {
+      const messages = parseConversation(conv.path);
+      if (messages.length < 2) { skipped++; continue; }
+
+      const firstMsg = messages[0];
+      const lastMsg = messages[messages.length - 1];
+      const firstTime = new Date(firstMsg.timestamp);
+      const lastTime = new Date(lastMsg.timestamp);
+      const dateStr = firstTime.toISOString().split('T')[0];
+      const startTime = firstTime.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+      const endTime = lastTime.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+      // Topic detection: ilk 20 mesajdan belirle (uzun oturumlarda konu kaymasini onler)
+      const topicText = messages.slice(0, 20).map(m => m.text).join(' ');
+      const topic = detectTopic(topicText);
+      const firstUserMsg = messages.find(m => m.role === 'user')?.text || 'Session';
+      const title = firstUserMsg.substring(0, 80).replace(/\n/g, ' ');
+      const userCount = messages.filter(m => m.role === 'user').length;
+      const assistantCount = messages.filter(m => m.role === 'assistant').length;
+
+      let md = `# ${title}\n\n`;
+      md += `**Tarih:** ${dateStr}\n`;
+      md += `**Saat:** ${startTime} - ${endTime}\n`;
+      md += `**Kaynak:** Terminal (Claude Code CLI)\n`;
+      md += `**Mesaj:** ${userCount} kullanici, ${assistantCount} asistan\n`;
+      if (topic) md += `**Konu:** ${topic}\n`;
+      md += `\n---\n\n## Diyalog\n\n`;
+
+      for (const m of messages) {
+        const ts = new Date(m.timestamp).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        if (m.role === 'user') {
+          md += `### Kullanici (${ts})\n${m.text}\n\n`;
+        } else {
+          const dot = /```/.test(m.text) ? '\u{1F7E2}' : '\u26AA';
+          md += `### ${dot} Claude (${ts})\n${m.text}\n\n`;
+        }
+      }
+      md += `\n---\n_<!-- session:${conv.sessionId} -->_\n`;
+
+      const slug = topic || firstUserMsg.substring(0, 40).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+      let filename = `${dateStr}_${slug}_cli.md`;
+      let outPath = path.join(sessionsDir, filename);
+      if (fs.existsSync(outPath) && !opts.force) {
+        const base = filename.replace('.md', '');
+        let n = 2;
+        while (fs.existsSync(path.join(sessionsDir, `${base}_${n}.md`))) n++;
+        outPath = path.join(sessionsDir, `${base}_${n}.md`);
+        filename = `${base}_${n}.md`;
+      }
+
+      fs.writeFileSync(outPath, md, 'utf-8');
+      synced++;
+    } catch (e) {
+      errors.push(`${conv.sessionId}: ${e.message}`);
+    }
+  }
+
+  return { synced, skipped, errors, total: conversations.length };
+}
+
+ipcMain.handle('sync-terminal-sessions', async (event, opts) => {
+  return syncTerminalSessions(opts || {});
 });
 
 // ---- IPC: Temp Images ----

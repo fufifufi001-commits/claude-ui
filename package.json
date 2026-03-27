@@ -1,6 +1,6 @@
 {
   "name": "claude-ui",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "description": "Claude Code 3-Panel Wrapper UI",
   "main": "main.js",
   "scripts": {
@@ -29,7 +29,8 @@
     ],
     "win": {
       "target": "portable",
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.png",
+      "signAndEditExecutable": false
     },
     "mac": {
       "target": "zip",
