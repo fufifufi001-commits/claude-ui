@@ -322,6 +322,7 @@ workdirLabel.onclick = async () => {
     state.workingDir = dir;
     workdirLabel.textContent = dir.length > 40 ? '...' + dir.slice(-37) : dir;
     workdirLabel.title = dir;
+    await window.claude.updateSettings({ workingDir: dir });
   }
 };
 
