@@ -28,7 +28,8 @@ function createChatTab(name) {
     activeCodeTab: 0,
     scrollPos: 0,
     sessionId: null,
-    sessionContext: null
+    sessionContext: null,
+    isWaiting: false
   };
   state.chatTabs.push(tab);
   return tab;
@@ -41,6 +42,7 @@ function saveCurrentTabState() {
   tab.codeBlocks = [...state.codeBlocks];
   tab.activeCodeTab = state.activeCodeTab;
   tab.scrollPos = chatMessages.scrollTop;
+  tab.isWaiting = state.isWaiting;
   // sessionId is already on the tab object, no need to copy
 }
 
@@ -50,6 +52,20 @@ function loadTabState(index) {
   state.messages = [...tab.messages];
   state.codeBlocks = [...tab.codeBlocks];
   state.activeCodeTab = tab.activeCodeTab;
+  state.isWaiting = tab.isWaiting || false;
+}
+
+function updateInputState() {
+  const tab = state.chatTabs[state.activeChatTab];
+  if (tab?.dialogEnded) {
+    chatInput.disabled = true;
+    chatInput.placeholder = 'Bu diyalog sonlandirilmis — yeni tab acin';
+    sendBtn.disabled = true;
+  } else {
+    chatInput.disabled = false;
+    chatInput.placeholder = 'Mesajinizi yazin... (Ctrl+V ile screenshot yapistirabilirsiniz)';
+    sendBtn.disabled = state.isWaiting;
+  }
 }
 
 function switchToTab(index) {
@@ -68,6 +84,14 @@ function switchToTab(index) {
   // Restore scroll
   chatMessages.scrollTop = state.chatTabs[index]?.scrollPos || 0;
 
+  // Restore waiting/loading state for this tab
+  if (state.isWaiting) {
+    showTyping();
+  } else {
+    removeTyping();
+  }
+  updateInputState();
+
   // Re-render code panel
   renderCodePanel();
   renderChatTabs();
@@ -75,12 +99,14 @@ function switchToTab(index) {
 
 function renderChatTabs() {
   const list = $('#chatTabsList');
-  list.innerHTML = state.chatTabs.map((tab, i) => `
-    <div class="chat-tab-item ${i === state.activeChatTab ? 'active' : ''}" data-index="${i}">
-      <span class="tab-label" title="${tab.label}">${tab.label}</span>
+  list.innerHTML = state.chatTabs.map((tab, i) => {
+    const waitingDot = tab.isWaiting ? '<span class="tab-working-dot"></span>' : '';
+    return `
+    <div class="chat-tab-item ${i === state.activeChatTab ? 'active' : ''} ${tab.isWaiting ? 'tab-working' : ''}" data-index="${i}">
+      ${waitingDot}<span class="tab-label" title="${tab.label}">${tab.label}</span>
       <span class="tab-close" data-index="${i}">&times;</span>
-    </div>
-  `).join('') + '<button class="chat-tab-add" id="addChatTabInline" title="Yeni sohbet (Ctrl+N)">+</button>';
+    </div>`;
+  }).join('') + '<button class="chat-tab-add" id="addChatTabInline" title="Yeni sohbet (Ctrl+N)">+</button>';
 
   list.querySelectorAll('.chat-tab-item').forEach(item => {
     item.addEventListener('click', (e) => {
@@ -115,12 +141,24 @@ function renderChatTabs() {
   if (addBtn) addBtn.onclick = () => $('#addChatTab')?.click() || addNewChatTab();
 }
 
-function closeChatTab(index) {
-  // Auto-save before closing
+async function closeChatTab(index) {
   saveCurrentTabState();
   const closedTab = state.chatTabs[index];
+
+  // If tab has messages, ask user what to do
   if (closedTab.messages.length > 0) {
-    autoSaveTabSession(closedTab);
+    const choice = await showCloseDialog();
+    if (!choice) return; // user dismissed
+
+    if (choice === 'end') {
+      // Sonlandır: save as finalized, mark as ended
+      closedTab.dialogEnded = true;
+      await autoSaveTabSession(closedTab);
+    } else {
+      // Devam Ettir: save as resumable
+      closedTab.dialogEnded = false;
+      await autoSaveTabSession(closedTab);
+    }
   }
 
   state.chatTabs.splice(index, 1);
@@ -141,6 +179,7 @@ function closeChatTab(index) {
   if (state.messages.length === 0) showWelcome();
   renderCodePanel();
   renderChatTabs();
+  await loadSessions();
 }
 
 // Detect topic from conversation content
@@ -311,6 +350,36 @@ function showPrompt(title, defaultValue = '') {
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') close(input.value);
       if (e.key === 'Escape') close(null);
+    });
+  });
+}
+
+// Dialog: "Bu Diyaloğu Sonlandır" / "Bu Diyaloğu Devam Ettir"
+function showCloseDialog() {
+  return new Promise((resolve) => {
+    const existing = document.querySelector('.prompt-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'prompt-overlay';
+    overlay.innerHTML = `
+      <div class="prompt-dialog">
+        <div class="prompt-title">Bu diyalog ne olsun?</div>
+        <div class="prompt-actions" style="gap:10px;margin-top:16px;">
+          <button class="prompt-cancel" data-action="end">Bu Diyalogu Sonlandir</button>
+          <button class="prompt-ok" data-action="continue">Bu Diyalogu Devam Ettir</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const close = (val) => { overlay.remove(); resolve(val); };
+
+    overlay.querySelector('[data-action="end"]').onclick = () => close('end');
+    overlay.querySelector('[data-action="continue"]').onclick = () => close('continue');
+    overlay.onclick = (e) => { if (e.target === overlay) close(null); };
+    document.addEventListener('keydown', function handler(e) {
+      if (e.key === 'Escape') { document.removeEventListener('keydown', handler); close(null); }
     });
   });
 }
@@ -622,30 +691,62 @@ async function sendMessage() {
   if (/^(exit|quit|cikis|çıkış)$/i.test(text)) {
     chatInput.value = '';
     chatInput.style.height = 'auto';
-    addMessage('user', text);
-    addMessage('assistant', 'Oturum kapatildi. Gorusmek uzere!');
-    await autoSaveSession();
-    // Reset current tab to clean state
-    const currentTab = state.chatTabs[state.activeChatTab];
-    if (currentTab) {
-      currentTab.messages = [];
-      currentTab.codeBlocks = [];
-      currentTab.sessionId = null;
-      currentTab.sessionContext = null;
-      currentTab.resumeFallback = false;
-      currentTab.labelUpdated = false;
-      currentTab.label = `Sohbet ${currentTab.tabNum}`;
+
+    const exitTab = state.chatTabs[state.activeChatTab];
+    if (exitTab && exitTab.messages.length > 0) {
+      const choice = await showCloseDialog();
+      if (!choice) return; // user dismissed
+
+      if (choice === 'end') {
+        addMessage('user', text);
+        addMessage('assistant', 'Diyalog sonlandirildi. Gorusmek uzere!');
+        exitTab.dialogEnded = true;
+        saveCurrentTabState();
+        await autoSaveTabSession(exitTab);
+        // Reset tab to clean state
+        exitTab.messages = [];
+        exitTab.codeBlocks = [];
+        exitTab.sessionId = null;
+        exitTab.sessionContext = null;
+        exitTab.resumeFallback = false;
+        exitTab.labelUpdated = false;
+        exitTab.label = `Sohbet ${exitTab.tabNum}`;
+        state.messages = [];
+        state.codeBlocks = [];
+        state.activeCodeTab = 0;
+        chatMessages.innerHTML = '';
+        showWelcome();
+        showToast('Diyalog sonlandirildi');
+      } else {
+        addMessage('user', text);
+        addMessage('assistant', 'Diyalog kaydedildi. Tekrar actiginizda devam edebilirsiniz.');
+        exitTab.dialogEnded = false;
+        saveCurrentTabState();
+        await autoSaveTabSession(exitTab);
+        // Reset tab to clean state
+        exitTab.messages = [];
+        exitTab.codeBlocks = [];
+        exitTab.sessionId = null;
+        exitTab.sessionContext = null;
+        exitTab.resumeFallback = false;
+        exitTab.labelUpdated = false;
+        exitTab.label = `Sohbet ${exitTab.tabNum}`;
+        state.messages = [];
+        state.codeBlocks = [];
+        state.activeCodeTab = 0;
+        chatMessages.innerHTML = '';
+        showWelcome();
+        showToast('Diyalog kaydedildi — devam edilebilir');
+      }
+    } else {
+      addMessage('user', text);
+      addMessage('assistant', 'Oturum kapatildi.');
     }
-    state.messages = [];
-    state.codeBlocks = [];
-    state.activeCodeTab = 0;
-    chatMessages.innerHTML = '';
-    showWelcome();
+
     renderCodePanel();
     renderChatTabs();
     await loadSessions();
     chatInput.focus();
-    showToast('Oturum kaydedildi');
     return;
   }
 
@@ -681,6 +782,7 @@ async function sendMessage() {
   renderImagePreviews();
 
   state.isWaiting = true;
+  if (currentTab) { currentTab.isWaiting = true; renderChatTabs(); }
   sendBtn.disabled = true;
   showTyping();
 
@@ -728,6 +830,7 @@ async function sendMessage() {
   }
 
   state.isWaiting = false;
+  if (currentTab) { currentTab.isWaiting = false; renderChatTabs(); }
   sendBtn.disabled = false;
   chatInput.focus();
 
@@ -792,7 +895,7 @@ function updateStreamingCodePanel(content) {
           <span class="code-block-lang">${lang}</span>
           <span style="color:var(--warning);font-size:10px;">● Yaziliyor...</span>
         </div>
-        <pre style="min-height:100px;">${escapeHtml(code)}<span style="animation:pulse 0.8s infinite;color:var(--accent);">|</span></pre>
+        <pre style="min-height:100px;">${highlightCode(code, lang)}<span style="animation:pulse 0.8s infinite;color:var(--accent);">|</span></pre>
       </div>
     `;
 
@@ -928,9 +1031,11 @@ function removeTyping() {
 function formatMarkdown(text) {
   let html = escapeHtml(text);
 
-  // Code blocks with language
+  // Code blocks with language + syntax highlighting
+  // Note: code is already escaped by the top-level escapeHtml, so use highlightEscaped
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
-    return `<pre><code class="lang-${lang || 'text'}">${code.trim()}</code></pre>`;
+    const highlighted = highlightEscaped(code.trim(), lang || 'text');
+    return `<pre><code class="lang-${lang || 'text'}">${highlighted}</code></pre>`;
   });
 
   // Inline code
@@ -956,6 +1061,46 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// Syntax highlight for already-escaped HTML (used in formatMarkdown where text is pre-escaped)
+function highlightEscaped(escapedCode, lang) {
+  return _highlightLines(escapedCode.split('\n'), lang);
+}
+
+// Syntax highlighting matching Claude Code terminal style
+function highlightCode(code, lang) {
+  return _highlightLines(escapeHtml(code).split('\n'), lang);
+}
+
+function _highlightLines(lines, lang) {
+  return lines.map(line => {
+    // Diff highlighting: deleted lines (red bg), added lines (green bg)
+    if (lang === 'diff' || line.match(/^[-+]/)) {
+      if (/^[-]/.test(line) && !/^---/.test(line)) {
+        return `<span class="hl-diff-del">${line}</span>`;
+      }
+      if (/^[+]/.test(line) && !/^\+\+\+/.test(line)) {
+        return `<span class="hl-diff-add">${line}</span>`;
+      }
+      if (/^@@/.test(line)) {
+        return `<span class="hl-diff-hunk">${line}</span>`;
+      }
+    }
+    // General syntax highlighting
+    let hl = line;
+    // Strings (double and single quotes)
+    hl = hl.replace(/(["'`])(?:(?!\1|\\).|\\.)*?\1/g, '<span class="hl-string">$&</span>');
+    // Comments (// and #)
+    hl = hl.replace(/(\/\/.*$|#.*$)/gm, '<span class="hl-comment">$&</span>');
+    // Keywords
+    hl = hl.replace(/\b(const|let|var|function|return|if|else|for|while|class|import|export|from|async|await|new|this|try|catch|throw|switch|case|break|default|continue|typeof|instanceof|in|of|do|yield|void|delete|null|undefined|true|false|def|self|elif|except|finally|with|as|lambda|pass|raise|print|None|True|False|pub|fn|use|mod|struct|impl|enum|match|mut|loop|crate|trait|type|interface|extends|implements|abstract|super|static|final|public|private|protected|package|override)\b/g, '<span class="hl-keyword">$&</span>');
+    // Numbers
+    hl = hl.replace(/\b(\d+\.?\d*)\b/g, '<span class="hl-number">$&</span>');
+    // Function calls
+    hl = hl.replace(/\b([a-zA-Z_]\w*)\s*\(/g, '<span class="hl-func">$1</span>(');
+    return hl;
+  }).join('\n');
 }
 
 // ===== Code Panel =====
@@ -1020,7 +1165,7 @@ function renderCodePanel() {
           <span class="code-block-lang">${block.lang}</span>
           <button class="code-block-copy" data-code="${state.activeCodeTab}">Kopyala</button>
         </div>
-        <pre>${escapeHtml(block.code)}</pre>
+        <pre>${highlightCode(block.code, block.lang)}</pre>
       </div>
     `;
 
@@ -1092,16 +1237,18 @@ function renderSessionList(sessions) {
   sessionList.innerHTML = html;
 
   sessionList.querySelectorAll('.session-item').forEach(item => {
-    item.onclick = async () => {
-      const content = await window.claude.loadSession(item.dataset.file, item.dataset.subdir);
-      if (!content) return;
-
+    // Single click: select (highlight only)
+    item.onclick = () => {
       sessionList.querySelectorAll('.session-item').forEach(i => i.classList.remove('active'));
       item.classList.add('active');
-
-      // Parse session and load into a new tab
-      loadSessionIntoTab(content, item.dataset.file);
     };
+
+    // Double click: open session in a new tab
+    item.addEventListener('dblclick', async () => {
+      const content = await window.claude.loadSession(item.dataset.file, item.dataset.subdir);
+      if (!content) return;
+      loadSessionIntoTab(content, item.dataset.file);
+    });
 
     // Right-click context menu
     item.addEventListener('contextmenu', (e) => {
@@ -1210,7 +1357,11 @@ function parseSessionMarkdown(content) {
   // Prefer UI sessionId field over CLI comment
   const finalSessionId = uiSessionMatch ? uiSessionMatch[1] : sessionId;
 
-  return { sessionId: finalSessionId, topic, messages, source };
+  // Check dialog status
+  const statusMatch = content.match(/\*\*Durum:\*\* (.+)/m);
+  const dialogEnded = statusMatch ? statusMatch[1].trim() === 'Sonlandirildi' : false;
+
+  return { sessionId: finalSessionId, topic, messages, source, dialogEnded };
 }
 
 // Build context summary from old session messages (for --append-system-prompt)
@@ -1253,7 +1404,11 @@ function loadSessionIntoTab(content, filename) {
     }
   }
 
-  if (parsed.source === 'UI' && parsed.sessionId) {
+  if (parsed.dialogEnded) {
+    // Sonlandırılmış diyalog: salt okunur, devam edilemez
+    tab.dialogEnded = true;
+    showToast('Bu diyalog sonlandirilmis — salt okunur');
+  } else if (parsed.source === 'UI' && parsed.sessionId) {
     // UI session: use --resume for full memory (fallback to context on error)
     tab.sessionId = parsed.sessionId;
     tab.sessionContext = buildSessionContext(parsed.messages, parsed.topic); // fallback
@@ -1272,6 +1427,7 @@ function loadSessionIntoTab(content, filename) {
   chatMessages.scrollTop = chatMessages.scrollHeight;
   renderChatTabs();
   renderCodePanel();
+  updateInputState();
   chatInput.focus();
 }
 
@@ -1300,13 +1456,17 @@ sessionSearch.addEventListener('input', async () => {
         `).join('');
 
       sessionList.querySelectorAll('.session-item').forEach(item => {
-        item.onclick = async () => {
-          const content = await window.claude.loadSession(item.dataset.file, item.dataset.subdir);
-          if (!content) return;
+        // Single click: select only
+        item.onclick = () => {
           sessionList.querySelectorAll('.session-item').forEach(i => i.classList.remove('active'));
           item.classList.add('active');
-          loadSessionIntoTab(content, item.dataset.file);
         };
+        // Double click: open session
+        item.addEventListener('dblclick', async () => {
+          const content = await window.claude.loadSession(item.dataset.file, item.dataset.subdir);
+          if (!content) return;
+          loadSessionIntoTab(content, item.dataset.file);
+        });
       });
     } else {
       const sessions = await window.claude.getSessions();
@@ -1340,7 +1500,8 @@ async function autoSaveTabSession(tab) {
   const filename = `${today}_${titleSlug}${tabSuffix}.md`;
 
   const tabSessionId = tab.sessionId || null;
-  const content = generateSessionMarkdownFor(msgs, codes, topic, tabSessionId);
+  const dialogStatus = tab.dialogEnded ? 'ended' : 'active';
+  const content = generateSessionMarkdownFor(msgs, codes, topic, tabSessionId, dialogStatus);
   await window.claude.saveSession(filename, content);
   await loadSessions();
 }
@@ -1351,7 +1512,7 @@ function generateSessionMarkdown() {
   return generateSessionMarkdownFor(state.messages, state.codeBlocks, detectTopic(topicText), currentTab?.sessionId);
 }
 
-function generateSessionMarkdownFor(msgs, codes, topic, sessionId) {
+function generateSessionMarkdownFor(msgs, codes, topic, sessionId, dialogStatus) {
   const now = new Date();
   // Use current tab label as title
   const currentTab = state.chatTabs[state.activeChatTab];
@@ -1374,6 +1535,7 @@ function generateSessionMarkdownFor(msgs, codes, topic, sessionId) {
   md += `**Mesaj:** ${userCount} kullanici, ${assistantCount} asistan\n`;
   if (topic) md += `**Konu:** ${topic}\n`;
   if (sessionId) md += `**SessionID:** ${sessionId}\n`;
+  if (dialogStatus) md += `**Durum:** ${dialogStatus === 'ended' ? 'Sonlandirildi' : 'Devam Edebilir'}\n`;
   if (state.workingDir) md += `**Dizin:** ${state.workingDir}\n`;
   md += `\n---\n\n`;
 

@@ -299,6 +299,17 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
 .chat-tab-item:hover .tab-close { opacity: 1; }
 .chat-tab-item .tab-close:hover { color: var(--error); }
 
+.tab-working { border-color: var(--warning, #f59e0b) !important; }
+.tab-working-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--warning, #f59e0b); flex-shrink: 0;
+  animation: tab-pulse 1.2s ease-in-out infinite;
+}
+@keyframes tab-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
 .chat-tab-add {
   width: 22px; height: 22px; border: 1px dashed var(--border);
   background: transparent; color: var(--text-muted); font-size: 13px;
@@ -529,6 +540,37 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
   white-space: pre-wrap; word-wrap: break-word;
   background: #000000;
 }
+
+/* ===== Syntax Highlighting (Claude Code Terminal Style) ===== */
+.hl-diff-del {
+  display: inline-block; width: 100%;
+  background: rgba(248, 113, 113, 0.2); color: #fca5a5;
+  text-decoration: line-through; text-decoration-color: rgba(248, 113, 113, 0.4);
+}
+.hl-diff-add {
+  display: inline-block; width: 100%;
+  background: rgba(52, 211, 153, 0.2); color: #6ee7b7;
+}
+.hl-diff-hunk { color: #93c5fd; }
+.hl-keyword { color: #c084fc; }
+.hl-string { color: #86efac; }
+.hl-comment { color: #6b7280; font-style: italic; }
+.hl-number { color: #fbbf24; }
+.hl-func { color: #60a5fa; }
+
+[data-theme="light"] .hl-diff-del {
+  background: rgba(220, 38, 38, 0.15); color: #991b1b;
+  text-decoration-color: rgba(220, 38, 38, 0.3);
+}
+[data-theme="light"] .hl-diff-add {
+  background: rgba(5, 150, 105, 0.15); color: #065f46;
+}
+[data-theme="light"] .hl-diff-hunk { color: #1d4ed8; }
+[data-theme="light"] .hl-keyword { color: #7c3aed; }
+[data-theme="light"] .hl-string { color: #059669; }
+[data-theme="light"] .hl-comment { color: #9ca3af; font-style: italic; }
+[data-theme="light"] .hl-number { color: #d97706; }
+[data-theme="light"] .hl-func { color: #2563eb; }
 
 /* ===== Help Modal ===== */
 .modal-overlay {

@@ -176,16 +176,18 @@ ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, s
       args.push('--append-system-prompt-file', contextFile);
     }
 
-    // Images
+    // Images - embed file paths in the message so Claude can read them with Read tool
+    let fullMessage = message;
     if (imagePaths && imagePaths.length > 0) {
-      imagePaths.forEach(p => args.push('--image', p));
+      const imageRefs = imagePaths.map(p => `[Image: ${p}]`).join('\n');
+      fullMessage = `${imageRefs}\n\n${message}`;
     }
 
     // Spawn with piped stdin - write message there (avoids shell encoding issues)
     const proc = spawn(claudeCmd, args, { shell: true, cwd, stdio: ['pipe', 'pipe', 'pipe'] });
 
     // Send message via stdin and close it
-    proc.stdin.write(message, 'utf-8');
+    proc.stdin.write(fullMessage, 'utf-8');
     proc.stdin.end();
 
     let output = '';
