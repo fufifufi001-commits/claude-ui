@@ -1043,14 +1043,14 @@ async function sendMessage() {
   const imagePaths = state.pastedImages.map(img => img.path);
   const imageDataUrls = state.pastedImages.map(img => img.base64);
 
+  // Get current tab for conversation continuity
+  const currentTab = state.chatTabs[state.activeChatTab];
+
   // Track for permission re-send
   lastSentMessage = text;
   lastSentImagePaths = [...imagePaths];
   lastSentTabId = currentTab?.id || null;
   permissionPending = false;
-
-  // Get current tab for conversation continuity
-  const currentTab = state.chatTabs[state.activeChatTab];
   let sessionId = currentTab?.sessionId || null;
   // Determine how to handle session continuity
   let sessionContext = null;
