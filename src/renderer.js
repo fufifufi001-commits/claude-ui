@@ -21,6 +21,8 @@ const state = {
 // Permission re-send tracking
 let lastSentMessage = null;
 let lastSentImagePaths = [];
+let permissionPending = false;
+const PERMISSION_REQUIRED_TOOLS = new Set(['Write', 'Edit', 'Bash', 'NotebookEdit']);
 
 function createChatTab(name) {
   const id = Date.now();
@@ -364,6 +366,20 @@ window.claude.onEvent((evt) => {
     const last = blocks[blocks.length - 1];
     if (last?.type === 'tool_use') {
       setToolActivity('running', last.name + '...');
+
+      // Permission check: detect write-type tools from JSON stream
+      // (-p mode doesn't produce stderr permission prompts, so we detect here)
+      if (!state.skipPermissions && !permissionPending && PERMISSION_REQUIRED_TOOLS.has(last.name)) {
+        permissionPending = true;
+        let desc = `Claude "${last.name}" aracını kullanmak istiyor.`;
+        if (last.input?.file_path) desc += `\nDosya: ${last.input.file_path}`;
+        if (last.input?.command) {
+          const cmd = last.input.command.length > 200 ? last.input.command.substring(0, 200) + '...' : last.input.command;
+          desc += `\nKomut: ${cmd}`;
+        }
+        if (last.input?.old_string) desc += `\nDüzenleme: ${last.input.old_string.substring(0, 100)}...`;
+        showPermissionCard(desc);
+      }
     }
     // Update context usage (cumulative from usage object)
     const usage = evt.message?.usage;
@@ -377,6 +393,7 @@ window.claude.onEvent((evt) => {
   // Result event — turn complete
   if (evt.type === 'result') {
     setToolActivity('idle', 'Hazir');
+    permissionPending = false;
   }
 });
 
@@ -1004,6 +1021,7 @@ async function sendMessage() {
   // Track for permission re-send
   lastSentMessage = text;
   lastSentImagePaths = [...imagePaths];
+  permissionPending = false;
 
   // Get current tab for conversation continuity
   const currentTab = state.chatTabs[state.activeChatTab];
@@ -1234,6 +1252,7 @@ function showPermissionCard(promptText) {
   // Re-send message with permissions
   async function resendWithPermission(enableGlobal) {
     card.remove();
+    permissionPending = false;
     if (enableGlobal) {
       state.skipPermissions = true;
       // Update Tam Yetki button visual
@@ -1294,6 +1313,7 @@ function showPermissionCard(promptText) {
   };
   card.querySelector('.perm-deny').onclick = async () => {
     card.remove();
+    permissionPending = false;
     await window.claude.killActiveProcess();
     addMessage('assistant', 'Izin reddedildi. Islem iptal edildi.');
     state.isWaiting = false;
