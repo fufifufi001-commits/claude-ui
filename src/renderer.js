@@ -1136,7 +1136,7 @@ async function sendMessage() {
     // If this looks like a permission error, show permission card instead of error
     const msg = (err.message || '').toLowerCase();
     const isPermErr = !state.skipPermissions && (
-      /permission|not allowed|denied|user rejected|aborted/.test(msg)
+      /permission|not allowed|denied|user rejected|aborted|izin|izni|onaylam|reddedil|yazma izni/.test(msg)
     );
     if (isPermErr) {
       permissionPending = true;
