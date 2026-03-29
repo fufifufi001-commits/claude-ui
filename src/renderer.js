@@ -1125,6 +1125,25 @@ async function sendMessage() {
     extractCodeBlocks(responseText);
   } catch (err) {
     removeTyping();
+    const streamMsg = chatMessages.querySelector('.message.streaming');
+    if (streamMsg) streamMsg.remove();
+
+    // If permission card is already showing, let it handle the retry — don't show error
+    if (permissionPending) {
+      return; // permission card manages isWaiting/sendBtn state
+    }
+
+    // If this looks like a permission error, show permission card instead of error
+    const msg = (err.message || '').toLowerCase();
+    const isPermErr = !state.skipPermissions && (
+      /permission|not allowed|denied|user rejected|aborted/.test(msg)
+    );
+    if (isPermErr) {
+      permissionPending = true;
+      showPermissionCard('Claude bir araç kullanmak istedi ancak izin verilemedi.\nTekrar denemek için izin verin.');
+      return; // permission card manages isWaiting/sendBtn state
+    }
+
     addMessage('assistant', `Hata: ${err.message}`);
   }
 
