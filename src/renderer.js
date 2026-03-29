@@ -1124,14 +1124,14 @@ async function sendMessage() {
     addMessage('assistant', responseText);
     extractCodeBlocks(responseText);
   } catch (err) {
+    // If permission resend is in progress, don't touch DOM or show errors
+    if (permissionPending) {
+      return; // resendWithPermission manages everything
+    }
+
     removeTyping();
     const streamMsg = chatMessages.querySelector('.message.streaming');
     if (streamMsg) streamMsg.remove();
-
-    // If permission card is already showing, let it handle the retry — don't show error
-    if (permissionPending) {
-      return; // permission card manages isWaiting/sendBtn state
-    }
 
     // If this looks like a permission error, show permission card instead of error
     const msg = (err.message || '').toLowerCase();
@@ -1312,7 +1312,9 @@ function showPermissionCard(promptText) {
   // Re-send message with permissions
   async function resendWithPermission(enableGlobal) {
     card.remove();
-    permissionPending = false;
+    // Keep permissionPending=true until resend completes — this prevents
+    // the original sendMessage catch block from showing "Hata" when the
+    // old process is killed (kill triggers reject → catch sees permissionPending=true → suppresses error)
     if (enableGlobal) {
       state.skipPermissions = true;
       // Update Tam Yetki button visual
@@ -1361,6 +1363,7 @@ function showPermissionCard(promptText) {
       addMessage('assistant', `Hata: ${err.message}`);
     }
 
+    permissionPending = false;
     state.isWaiting = false;
     if (currentTab) { currentTab.isWaiting = false; renderChatTabs(); }
     sendBtn.disabled = false;
