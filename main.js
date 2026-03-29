@@ -140,7 +140,7 @@ ipcMain.on('window-close', () => mainWindow?.close());
 // ---- IPC: Claude CLI ----
 const crypto = require('crypto');
 
-let activeProcess = null;
+const activeProcesses = new Map(); // tabId -> process
 
 function isPermissionPrompt(text) {
   const t = text.toLowerCase();
@@ -153,7 +153,7 @@ function isPermissionPrompt(text) {
   );
 }
 
-ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, sessionContext, skipPermissions, model) => {
+ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, sessionContext, skipPermissions, model, tabId) => {
   const settings = loadSettings() || {};
   const claudeCmd = settings.claudePath || 'claude';
   const cwd = settings.workingDir || process.cwd();
@@ -203,7 +203,7 @@ ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, s
 
     // Spawn with piped stdin - write message there (avoids shell encoding issues)
     const proc = spawn(claudeCmd, args, { shell: true, cwd, stdio: ['pipe', 'pipe', 'pipe'] });
-    activeProcess = proc;
+    if (tabId) activeProcesses.set(tabId, proc);
 
     // Send message via stdin and close it
     proc.stdin.write(fullMessage, 'utf-8');
@@ -223,7 +223,7 @@ ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, s
         if (!line.trim()) continue;
         try {
           const evt = JSON.parse(line);
-          mainWindow?.webContents.send('claude-event', evt);
+          mainWindow?.webContents.send('claude-event', evt, tabId);
 
           // Extract text for streaming display
           if (evt.type === 'assistant') {
@@ -231,7 +231,7 @@ ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, s
             if (Array.isArray(content)) {
               for (const block of content) {
                 if (block.type === 'text') {
-                  mainWindow?.webContents.send('claude-stream', block.text);
+                  mainWindow?.webContents.send('claude-stream', block.text, tabId);
                 }
               }
             }
@@ -244,11 +244,11 @@ ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, s
               durationMs: evt.duration_ms || 0,
               usage: evt.usage || {},
               modelUsage: evt.modelUsage || {}
-            });
+            }, tabId);
           }
         } catch (e) {
           // Not valid JSON — treat as plain text stream
-          mainWindow?.webContents.send('claude-stream', line);
+          mainWindow?.webContents.send('claude-stream', line, tabId);
         }
       }
     });
@@ -256,20 +256,20 @@ ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, s
     proc.stderr.on('data', (data) => {
       const text = data.toString();
       errorOutput += text;
-      mainWindow?.webContents.send('claude-agent-log', text);
+      mainWindow?.webContents.send('claude-agent-log', text, tabId);
       // Detect permission prompts and notify renderer
       if (!skipPermissions && isPermissionPrompt(text)) {
-        mainWindow?.webContents.send('claude-permission-request', text);
+        mainWindow?.webContents.send('claude-permission-request', text, tabId);
       }
     });
 
     proc.on('close', (code) => {
-      activeProcess = null;
+      if (tabId) activeProcesses.delete(tabId);
       // Process any remaining buffer
       if (jsonBuffer.trim()) {
         try {
           const evt = JSON.parse(jsonBuffer);
-          mainWindow?.webContents.send('claude-event', evt);
+          mainWindow?.webContents.send('claude-event', evt, tabId);
           if (evt.type === 'result') {
             resultText = evt.result || '';
             mainWindow?.webContents.send('token-update', {
@@ -278,7 +278,7 @@ ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, s
               durationMs: evt.duration_ms || 0,
               usage: evt.usage || {},
               modelUsage: evt.modelUsage || {}
-            });
+            }, tabId);
           }
         } catch (e) {}
       }
@@ -295,10 +295,18 @@ ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, s
 });
 
 // Kill active Claude process (for permission handling)
-ipcMain.handle('kill-active-process', async () => {
-  if (activeProcess) {
-    try { activeProcess.kill(); } catch (e) {}
-    activeProcess = null;
+ipcMain.handle('kill-active-process', async (event, tabId) => {
+  if (tabId && activeProcesses.has(tabId)) {
+    try { activeProcesses.get(tabId).kill(); } catch (e) {}
+    activeProcesses.delete(tabId);
+    return true;
+  }
+  // Fallback: kill all processes
+  if (activeProcesses.size > 0) {
+    for (const [id, proc] of activeProcesses) {
+      try { proc.kill(); } catch (e) {}
+    }
+    activeProcesses.clear();
     return true;
   }
   return false;

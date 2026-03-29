@@ -1,6 +1,6 @@
 {
   "name": "claude-ui",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Claude Code 3-Panel Wrapper UI",
   "main": "main.js",
   "scripts": {

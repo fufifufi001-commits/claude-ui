@@ -21,17 +21,17 @@ contextBridge.exposeInMainWorld('claude', {
   selectDirectoryFor: (purpose) => ipcRenderer.invoke('select-directory-for', purpose),
 
   // Claude communication
-  sendMessage: (message, imagePaths, sessionId, sessionContext, skipPermissions, model) => ipcRenderer.invoke('send-to-claude', message, imagePaths, sessionId, sessionContext, skipPermissions, model),
+  sendMessage: (message, imagePaths, sessionId, sessionContext, skipPermissions, model, tabId) => ipcRenderer.invoke('send-to-claude', message, imagePaths, sessionId, sessionContext, skipPermissions, model, tabId),
   startSession: (workingDir) => ipcRenderer.invoke('start-interactive-session', workingDir),
   sendInteractive: (message) => ipcRenderer.invoke('send-interactive', message),
 
-  // Streams
-  onStream: (callback) => ipcRenderer.on('claude-stream', (_, data) => callback(data)),
-  onEvent: (callback) => ipcRenderer.on('claude-event', (_, data) => callback(data)),
-  onAgentLog: (callback) => ipcRenderer.on('claude-agent-log', (_, data) => callback(data)),
+  // Streams (tabId routing for tab isolation)
+  onStream: (callback) => ipcRenderer.on('claude-stream', (_, data, tabId) => callback(data, tabId)),
+  onEvent: (callback) => ipcRenderer.on('claude-event', (_, data, tabId) => callback(data, tabId)),
+  onAgentLog: (callback) => ipcRenderer.on('claude-agent-log', (_, data, tabId) => callback(data, tabId)),
   onSessionEnded: (callback) => ipcRenderer.on('claude-session-ended', (_, code) => callback(code)),
-  onPermissionRequest: (callback) => ipcRenderer.on('claude-permission-request', (_, data) => callback(data)),
-  killActiveProcess: () => ipcRenderer.invoke('kill-active-process'),
+  onPermissionRequest: (callback) => ipcRenderer.on('claude-permission-request', (_, data, tabId) => callback(data, tabId)),
+  killActiveProcess: (tabId) => ipcRenderer.invoke('kill-active-process', tabId),
 
   // Sessions
   getSessions: () => ipcRenderer.invoke('get-sessions'),
@@ -50,7 +50,7 @@ contextBridge.exposeInMainWorld('claude', {
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
 
   // Token counter
-  onTokenUpdate: (callback) => ipcRenderer.on('token-update', (_, data) => callback(data)),
+  onTokenUpdate: (callback) => ipcRenderer.on('token-update', (_, data, tabId) => callback(data, tabId)),
   getTotalTokens: () => ipcRenderer.invoke('get-total-tokens'),
   saveTotalTokens: (tokens) => ipcRenderer.invoke('save-total-tokens', tokens),
   saveTotalTokensSync: (tokens) => ipcRenderer.sendSync('save-total-tokens-sync', tokens),

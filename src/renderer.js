@@ -21,8 +21,17 @@ const state = {
 // Permission re-send tracking
 let lastSentMessage = null;
 let lastSentImagePaths = [];
+let lastSentTabId = null;
 let permissionPending = false;
 const PERMISSION_REQUIRED_TOOLS = new Set(['Write', 'Edit', 'Bash', 'NotebookEdit']);
+
+// Helper: find tab by ID and check if it's active
+function getTabByTabId(tabId) {
+  if (!tabId) return { tab: state.chatTabs[state.activeChatTab], index: state.activeChatTab, isActive: true };
+  const index = state.chatTabs.findIndex(t => t.id === tabId);
+  if (index === -1) return { tab: null, index: -1, isActive: false };
+  return { tab: state.chatTabs[index], index, isActive: index === state.activeChatTab };
+}
 
 function createChatTab(name) {
   const id = Date.now();
@@ -98,8 +107,15 @@ function switchToTab(index) {
   chatMessages.scrollTop = state.chatTabs[index]?.scrollPos || 0;
 
   // Restore waiting/loading state for this tab
+  const switchedTab = state.chatTabs[index];
   if (state.isWaiting) {
     showTyping();
+    // Restore streaming content if this tab has an in-progress response
+    if (switchedTab?._currentResponse) {
+      state.currentResponse = switchedTab._currentResponse;
+      updateStreamingMessage(state.currentResponse);
+      updateStreamingCodePanel(state.currentResponse);
+    }
   } else {
     removeTyping();
   }
@@ -274,23 +290,32 @@ function updateTokenDisplay() {
 }
 
 // Token update — only uses 'result' event (final, accurate data)
-window.claude.onTokenUpdate((data) => {
+window.claude.onTokenUpdate((data, tabId) => {
   if (data.type !== 'result') return;
+
+  const { tab: targetTab, isActive } = getTabByTabId(tabId);
 
   const usage = data.usage || {};
   const totalIn = (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
   const totalOut = usage.output_tokens || 0;
   const msgTokens = totalIn + totalOut;
 
-  // Session usage tracking
+  // Session usage tracking (global)
   sessionUsage.totalCostUsd += data.costUsd || 0;
   sessionUsage.totalInputTokens += totalIn;
   sessionUsage.totalOutputTokens += totalOut;
   sessionUsage.cacheReadTokens += usage.cache_read_input_tokens || 0;
   sessionUsage.turns++;
 
-  // Update counters
-  state.sessionTokens += msgTokens;
+  // Per-tab token tracking
+  if (targetTab) {
+    targetTab.sessionTokens = (targetTab.sessionTokens || 0) + msgTokens;
+  }
+
+  // Update counters — use active tab's tokens for display
+  if (isActive && targetTab) {
+    state.sessionTokens = targetTab.sessionTokens || 0;
+  }
   state.totalTokens += msgTokens;
   updateTokenDisplay();
 });
@@ -341,18 +366,19 @@ function setToolActivity(status, label) {
   toolLabel.textContent = label;
 }
 
-// Listen for all stream-json events
-window.claude.onEvent((evt) => {
+// Listen for all stream-json events (tab-routed)
+window.claude.onEvent((evt, tabId) => {
+  const { tab: targetTab, isActive } = getTabByTabId(tabId);
+
+  // System init events are global (model, MCP, slash commands)
   if (evt.type === 'system' && evt.subtype === 'init') {
     sessionUsage.slashCommands = evt.slash_commands || [];
     sessionUsage.model = evt.model || '';
     sessionUsage.sessionId = evt.session_id || '';
-    // Update model selector to match
     const modelKey = (evt.model || '').includes('opus') ? 'opus'
       : (evt.model || '').includes('haiku') ? 'haiku' : 'sonnet';
     modelSelect.value = modelKey;
     contextWindowSize = MODEL_CONTEXT[modelKey] || 1000000;
-    // MCP servers
     const servers = evt.mcp_servers || [];
     if (servers.length > 0) {
       const connected = servers.filter(s => s.status === 'connected').length;
@@ -360,16 +386,15 @@ window.claude.onEvent((evt) => {
     }
   }
 
-  // Tool use tracking — check the last content block to determine status
+  // Tool use tracking — only update DOM for active tab
   if (evt.type === 'assistant' && evt.message?.content) {
     const blocks = evt.message.content;
     const last = blocks[blocks.length - 1];
     if (last?.type === 'tool_use') {
-      setToolActivity('running', last.name + '...');
+      if (isActive) setToolActivity('running', last.name + '...');
 
       // Permission check: detect write-type tools from JSON stream
-      // (-p mode doesn't produce stderr permission prompts, so we detect here)
-      if (!state.skipPermissions && !permissionPending && PERMISSION_REQUIRED_TOOLS.has(last.name)) {
+      if (!state.skipPermissions && !permissionPending && PERMISSION_REQUIRED_TOOLS.has(last.name) && isActive) {
         permissionPending = true;
         let desc = `Claude "${last.name}" aracını kullanmak istiyor.`;
         if (last.input?.file_path) desc += `\nDosya: ${last.input.file_path}`;
@@ -381,9 +406,9 @@ window.claude.onEvent((evt) => {
         showPermissionCard(desc);
       }
     }
-    // Update context usage (cumulative from usage object)
+    // Update context usage
     const usage = evt.message?.usage;
-    if (usage) {
+    if (usage && isActive) {
       contextUsedTokens = (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0)
         + (usage.cache_creation_input_tokens || 0) + (usage.output_tokens || 0);
       updateContextBar();
@@ -392,7 +417,7 @@ window.claude.onEvent((evt) => {
 
   // Result event — turn complete
   if (evt.type === 'result') {
-    setToolActivity('idle', 'Hazir');
+    if (isActive) setToolActivity('idle', 'Hazir');
     permissionPending = false;
   }
 });
@@ -1021,6 +1046,7 @@ async function sendMessage() {
   // Track for permission re-send
   lastSentMessage = text;
   lastSentImagePaths = [...imagePaths];
+  lastSentTabId = currentTab?.id || null;
   permissionPending = false;
 
   // Get current tab for conversation continuity
@@ -1059,16 +1085,18 @@ async function sendMessage() {
 
   try {
     state.currentResponse = '';
+    if (currentTab) currentTab._currentResponse = '';
     let response;
     try {
-      response = await window.claude.sendMessage(text, imagePaths, sessionId, sessionContext, state.skipPermissions, modelSelect.value);
+      response = await window.claude.sendMessage(text, imagePaths, sessionId, sessionContext, state.skipPermissions, modelSelect.value, currentTab?.id);
     } catch (resumeErr) {
       // If --resume failed (JSONL missing), fallback to context approach
       const isResumeFail = resumeErr.message?.includes('No conversation found') || resumeErr.message?.includes('already in use');
       if (currentTab?.resumeFallback && currentTab.sessionContext && isResumeFail) {
         state.currentResponse = '';
+        if (currentTab) currentTab._currentResponse = '';
         const fallbackId = window.claude.generateUUID();
-        response = await window.claude.sendMessage(text, imagePaths, fallbackId, currentTab.sessionContext, state.skipPermissions, modelSelect.value);
+        response = await window.claude.sendMessage(text, imagePaths, fallbackId, currentTab.sessionContext, state.skipPermissions, modelSelect.value, currentTab?.id);
         sessionId = fallbackId;
         currentTab.resumeFallback = false;
       } else {
@@ -1109,10 +1137,21 @@ async function sendMessage() {
 }
 
 // ===== Streaming =====
-window.claude.onStream((chunk) => {
-  state.currentResponse += chunk;
-  updateStreamingMessage(state.currentResponse);
-  updateStreamingCodePanel(state.currentResponse);
+window.claude.onStream((chunk, tabId) => {
+  const { tab: targetTab, isActive } = getTabByTabId(tabId);
+
+  // Always accumulate response on the correct tab
+  if (targetTab) {
+    if (!targetTab._currentResponse) targetTab._currentResponse = '';
+    targetTab._currentResponse += chunk;
+  }
+
+  // Only update DOM and global state if this is the active tab
+  if (isActive) {
+    state.currentResponse = targetTab ? targetTab._currentResponse : (state.currentResponse + chunk);
+    updateStreamingMessage(state.currentResponse);
+    updateStreamingCodePanel(state.currentResponse);
+  }
 });
 
 function updateStreamingMessage(content) {
@@ -1191,8 +1230,9 @@ function updateStreamingCodePanel(content) {
 }
 
 // ===== Agent Log =====
-window.claude.onAgentLog((data) => {
-  addAgentLogEntry(data);
+window.claude.onAgentLog((data, tabId) => {
+  const { isActive } = getTabByTabId(tabId);
+  if (isActive) addAgentLogEntry(data);
 });
 
 function addAgentLogEntry(text) {
@@ -1221,8 +1261,9 @@ function addAgentLogEntry(text) {
 }
 
 // ===== Permission Request Handling =====
-window.claude.onPermissionRequest((data) => {
-  showPermissionCard(data);
+window.claude.onPermissionRequest((data, tabId) => {
+  const { isActive } = getTabByTabId(tabId);
+  if (isActive) showPermissionCard(data);
 });
 
 function showPermissionCard(promptText) {
@@ -1264,7 +1305,8 @@ function showPermissionCard(promptText) {
       });
     }
 
-    await window.claude.killActiveProcess();
+    const permTabId = lastSentTabId;
+    await window.claude.killActiveProcess(permTabId);
     showTyping();
 
     const currentTab = state.chatTabs[state.activeChatTab];
@@ -1281,8 +1323,9 @@ function showPermissionCard(promptText) {
 
     try {
       state.currentResponse = '';
+      if (currentTab) currentTab._currentResponse = '';
       const response = await window.claude.sendMessage(
-        lastSentMessage, lastSentImagePaths, sessionId, sessionContext, true, modelSelect.value
+        lastSentMessage, lastSentImagePaths, sessionId, sessionContext, true, modelSelect.value, permTabId
       );
       removeTyping();
       const streamMsg = chatMessages.querySelector('.message.streaming');
@@ -1314,7 +1357,7 @@ function showPermissionCard(promptText) {
   card.querySelector('.perm-deny').onclick = async () => {
     card.remove();
     permissionPending = false;
-    await window.claude.killActiveProcess();
+    await window.claude.killActiveProcess(lastSentTabId);
     addMessage('assistant', 'Izin reddedildi. Islem iptal edildi.');
     state.isWaiting = false;
     const currentTab = state.chatTabs[state.activeChatTab];
