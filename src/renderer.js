@@ -1378,8 +1378,10 @@ function showPermissionCard(promptText) {
   };
   card.querySelector('.perm-deny').onclick = async () => {
     card.remove();
-    permissionPending = false;
+    // Keep permissionPending=true until kill completes — prevents original
+    // sendMessage catch from showing "Hata" when the process dies
     await window.claude.killActiveProcess(lastSentTabId);
+    permissionPending = false;
     addMessage('assistant', 'Izin reddedildi. Islem iptal edildi.');
     state.isWaiting = false;
     const currentTab = state.chatTabs[state.activeChatTab];
