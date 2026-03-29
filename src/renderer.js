@@ -12,8 +12,15 @@ const state = {
   // Chat tabs
   chatTabs: [],
   activeChatTab: 0,
-  skipPermissions: false
+  skipPermissions: false,
+  // Token counter
+  sessionTokens: 0,
+  totalTokens: 0
 };
+
+// Permission re-send tracking
+let lastSentMessage = null;
+let lastSentImagePaths = [];
 
 function createChatTab(name) {
   const id = Date.now();
@@ -29,7 +36,8 @@ function createChatTab(name) {
     scrollPos: 0,
     sessionId: null,
     sessionContext: null,
-    isWaiting: false
+    isWaiting: false,
+    sessionTokens: 0
   };
   state.chatTabs.push(tab);
   return tab;
@@ -43,6 +51,7 @@ function saveCurrentTabState() {
   tab.activeCodeTab = state.activeCodeTab;
   tab.scrollPos = chatMessages.scrollTop;
   tab.isWaiting = state.isWaiting;
+  tab.sessionTokens = state.sessionTokens;
   // sessionId is already on the tab object, no need to copy
 }
 
@@ -53,6 +62,8 @@ function loadTabState(index) {
   state.codeBlocks = [...tab.codeBlocks];
   state.activeCodeTab = tab.activeCodeTab;
   state.isWaiting = tab.isWaiting || false;
+  state.sessionTokens = tab.sessionTokens || 0;
+  updateTokenDisplay();
 }
 
 function updateInputState() {
@@ -124,6 +135,11 @@ function renderChatTabs() {
         tab.label = newName.trim();
         tab.labelUpdated = true;
         renderChatTabs();
+        // Sync rename with left panel (session list)
+        saveCurrentTabState();
+        if (tab.messages && tab.messages.length >= 2) {
+          await autoSaveTabSession(tab);
+        }
         showToast('Tab yeniden adlandirildi');
       }
     });
@@ -226,11 +242,214 @@ const codeContent = $('#codeContent');
 const agentLog = $('#agentLog');
 const workdirLabel = $('#workdirLabel');
 const helpModal = $('#helpModal');
+const sessionTokensEl = $('#sessionTokens');
+const totalTokensEl = $('#totalTokens');
+const modelSelect = $('#modelSelect');
+const contextFill = $('#contextFill');
+const contextText = $('#contextText');
+const toolDot = $('#toolDot');
+const toolLabel = $('#toolLabel');
+const mcpStatus = $('#mcpStatus');
 
 // ===== Window Controls =====
 $('#btnMin').onclick = () => window.claude.minimize();
 $('#btnMax').onclick = () => window.claude.maximize();
 $('#btnClose').onclick = () => window.claude.close();
+
+// ===== Token Counter =====
+function formatTokenCount(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+function updateTokenDisplay() {
+  sessionTokensEl.textContent = formatTokenCount(state.sessionTokens);
+  totalTokensEl.textContent = formatTokenCount(state.totalTokens);
+  // Pulse animation
+  sessionTokensEl.classList.add('counting');
+  setTimeout(() => sessionTokensEl.classList.remove('counting'), 300);
+}
+
+// Token update — only uses 'result' event (final, accurate data)
+window.claude.onTokenUpdate((data) => {
+  if (data.type !== 'result') return;
+
+  const usage = data.usage || {};
+  const totalIn = (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
+  const totalOut = usage.output_tokens || 0;
+  const msgTokens = totalIn + totalOut;
+
+  // Session usage tracking
+  sessionUsage.totalCostUsd += data.costUsd || 0;
+  sessionUsage.totalInputTokens += totalIn;
+  sessionUsage.totalOutputTokens += totalOut;
+  sessionUsage.cacheReadTokens += usage.cache_read_input_tokens || 0;
+  sessionUsage.turns++;
+
+  // Update counters
+  state.sessionTokens += msgTokens;
+  state.totalTokens += msgTokens;
+  updateTokenDisplay();
+});
+
+// Model selector
+modelSelect.onchange = () => {
+  const model = modelSelect.value;
+  contextWindowSize = MODEL_CONTEXT[model] || 1000000;
+  updateContextBar();
+  showToast(`Model: ${model}`);
+};
+
+$('#btnResetTokens').onclick = async () => {
+  if (confirm('Toplam token sayaci sifirlansin mi?')) {
+    state.totalTokens = 0;
+    await window.claude.resetTotalTokens();
+    updateTokenDisplay();
+  }
+};
+
+// ===== Slash Commands =====
+// Session cost/usage tracking (populated from stream-json result events)
+const sessionUsage = {
+  totalCostUsd: 0,
+  totalInputTokens: 0,
+  totalOutputTokens: 0,
+  cacheReadTokens: 0,
+  turns: 0,
+  model: '',
+  slashCommands: [],
+  sessionId: null
+};
+
+// Context window sizes per model family
+const MODEL_CONTEXT = { 'opus': 1000000, 'sonnet': 200000, 'haiku': 200000 };
+let contextWindowSize = 1000000;
+let contextUsedTokens = 0;
+
+function updateContextBar() {
+  const pct = contextWindowSize > 0 ? Math.min(100, (contextUsedTokens / contextWindowSize) * 100) : 0;
+  contextFill.style.width = pct + '%';
+  contextText.textContent = pct < 1 ? '<1%' : Math.round(pct) + '%';
+  contextFill.classList.toggle('warning', pct > 75);
+}
+
+function setToolActivity(status, label) {
+  toolDot.className = 'tool-dot ' + status;
+  toolLabel.textContent = label;
+}
+
+// Listen for all stream-json events
+window.claude.onEvent((evt) => {
+  if (evt.type === 'system' && evt.subtype === 'init') {
+    sessionUsage.slashCommands = evt.slash_commands || [];
+    sessionUsage.model = evt.model || '';
+    sessionUsage.sessionId = evt.session_id || '';
+    // Update model selector to match
+    const modelKey = (evt.model || '').includes('opus') ? 'opus'
+      : (evt.model || '').includes('haiku') ? 'haiku' : 'sonnet';
+    modelSelect.value = modelKey;
+    contextWindowSize = MODEL_CONTEXT[modelKey] || 1000000;
+    // MCP servers
+    const servers = evt.mcp_servers || [];
+    if (servers.length > 0) {
+      const connected = servers.filter(s => s.status === 'connected').length;
+      mcpStatus.textContent = `MCP: ${connected}/${servers.length}`;
+    }
+  }
+
+  // Tool use tracking — check the last content block to determine status
+  if (evt.type === 'assistant' && evt.message?.content) {
+    const blocks = evt.message.content;
+    const last = blocks[blocks.length - 1];
+    if (last?.type === 'tool_use') {
+      setToolActivity('running', last.name + '...');
+    }
+    // Update context usage (cumulative from usage object)
+    const usage = evt.message?.usage;
+    if (usage) {
+      contextUsedTokens = (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0)
+        + (usage.cache_creation_input_tokens || 0) + (usage.output_tokens || 0);
+      updateContextBar();
+    }
+  }
+
+  // Result event — turn complete
+  if (evt.type === 'result') {
+    setToolActivity('idle', 'Hazir');
+  }
+});
+
+function handleSlashCommand(text) {
+  const cmd = text.split(/\s+/)[0].toLowerCase();
+  const args = text.slice(cmd.length).trim();
+
+  switch (cmd) {
+    case '/usage':
+    case '/cost': {
+      const costStr = sessionUsage.totalCostUsd > 0
+        ? `$${sessionUsage.totalCostUsd.toFixed(4)}`
+        : 'Henuz maliyet verisi yok';
+      const input = formatTokenCount(sessionUsage.totalInputTokens);
+      const output = formatTokenCount(sessionUsage.totalOutputTokens);
+      const cache = formatTokenCount(sessionUsage.cacheReadTokens);
+      return {
+        showUser: true,
+        response: `**Session Kullanim Raporu**\n\n` +
+          `| Metrik | Deger |\n|---|---|\n` +
+          `| Model | ${sessionUsage.model || 'Bilinmiyor'} |\n` +
+          `| Toplam Maliyet | ${costStr} |\n` +
+          `| Input Token | ${input} |\n` +
+          `| Output Token | ${output} |\n` +
+          `| Cache Okunan | ${cache} |\n` +
+          `| Tur Sayisi | ${sessionUsage.turns} |\n` +
+          `| Session Token (tahmini) | ${formatTokenCount(state.sessionTokens)} |\n` +
+          `| Toplam Token (tum zamanlar) | ${formatTokenCount(state.totalTokens)} |`
+      };
+    }
+
+    case '/clear':
+      chatMessages.innerHTML = '';
+      state.messages = [];
+      showWelcome();
+      return { showUser: false, response: null };
+
+    case '/model':
+      return {
+        showUser: true,
+        response: `Aktif model: **${sessionUsage.model || 'Bilinmiyor'}**`
+      };
+
+    case '/help': {
+      const cmds = [
+        '`/usage` veya `/cost` — Token kullanimi ve maliyet raporu',
+        '`/clear` — Sohbet ekranini temizle',
+        '`/model` — Aktif modeli goster',
+        '`/help` — Bu yardim mesaji',
+        '`/compact` — Konusmayi ozetle (Claude\'a gonderilir)',
+        '`/reset-tokens` — Toplam token sayacini sifirla',
+        '`exit` veya `quit` — Diyalogu sonlandir'
+      ];
+      return {
+        showUser: true,
+        response: `**Kullanilabilir Komutlar**\n\n${cmds.join('\n')}`
+      };
+    }
+
+    case '/reset-tokens':
+      state.totalTokens = 0;
+      window.claude.resetTotalTokens();
+      updateTokenDisplay();
+      return {
+        showUser: true,
+        response: 'Toplam token sayaci sifirlandi.'
+      };
+
+    default:
+      // Not a local command — let it pass through to Claude CLI
+      return null;
+  }
+}
 
 // ===== Sidebar Toggle =====
 $('#sidebarToggle').onclick = () => $('#sidebar').classList.toggle('collapsed');
@@ -529,6 +748,9 @@ const DEFAULT_TEMPLATES = [
   { label: 'Acikla', prompt: 'Bu kodu acikla, ne yapiyor:' },
   { label: 'Optimize', prompt: 'Bu kodu optimize et, performansi artir:' },
   { label: 'Incele', prompt: 'Bu dosyayi incele ve iyilestirme onerileri sun:' },
+  { label: 'Review', prompt: '/review', slash: true },
+  { label: 'Guvenlik', prompt: '/security-review', slash: true },
+  { label: 'Compact', prompt: '/compact', slash: true },
   { label: 'Tam Yetki', prompt: '', danger: true }
 ];
 
@@ -564,6 +786,12 @@ function renderTemplateButtons() {
         btn.classList.toggle('active', state.skipPermissions);
         btn.textContent = state.skipPermissions ? 'Tam Yetki ON' : 'Tam Yetki';
         showToast(state.skipPermissions ? 'Tum izinler otomatik onaylanacak!' : 'Izin modu normal');
+      };
+    } else if (tpl.slash) {
+      btn.classList.add('prompt-btn-slash');
+      btn.onclick = () => {
+        chatInput.value = tpl.prompt;
+        sendMessage();
       };
     } else {
       btn.onclick = () => {
@@ -710,10 +938,13 @@ async function sendMessage() {
         exitTab.sessionContext = null;
         exitTab.resumeFallback = false;
         exitTab.labelUpdated = false;
+        exitTab.sessionTokens = 0;
         exitTab.label = `Sohbet ${exitTab.tabNum}`;
         state.messages = [];
         state.codeBlocks = [];
         state.activeCodeTab = 0;
+        state.sessionTokens = 0;
+        updateTokenDisplay();
         chatMessages.innerHTML = '';
         showWelcome();
         showToast('Diyalog sonlandirildi');
@@ -730,10 +961,13 @@ async function sendMessage() {
         exitTab.sessionContext = null;
         exitTab.resumeFallback = false;
         exitTab.labelUpdated = false;
+        exitTab.sessionTokens = 0;
         exitTab.label = `Sohbet ${exitTab.tabNum}`;
         state.messages = [];
         state.codeBlocks = [];
         state.activeCodeTab = 0;
+        state.sessionTokens = 0;
+        updateTokenDisplay();
         chatMessages.innerHTML = '';
         showWelcome();
         showToast('Diyalog kaydedildi — devam edilebilir');
@@ -750,8 +984,26 @@ async function sendMessage() {
     return;
   }
 
+  // Handle slash commands locally
+  if (text.startsWith('/')) {
+    const slashResult = handleSlashCommand(text);
+    if (slashResult !== null) {
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+      if (slashResult.showUser) addMessage('user', text);
+      if (slashResult.response) addMessage('assistant', slashResult.response);
+      chatInput.focus();
+      return;
+    }
+    // Not a local command — pass through to Claude CLI
+  }
+
   const imagePaths = state.pastedImages.map(img => img.path);
   const imageDataUrls = state.pastedImages.map(img => img.base64);
+
+  // Track for permission re-send
+  lastSentMessage = text;
+  lastSentImagePaths = [...imagePaths];
 
   // Get current tab for conversation continuity
   const currentTab = state.chatTabs[state.activeChatTab];
@@ -785,19 +1037,20 @@ async function sendMessage() {
   if (currentTab) { currentTab.isWaiting = true; renderChatTabs(); }
   sendBtn.disabled = true;
   showTyping();
+  setToolActivity('running', 'Claude dusunuyor...');
 
   try {
     state.currentResponse = '';
     let response;
     try {
-      response = await window.claude.sendMessage(text, imagePaths, sessionId, sessionContext, state.skipPermissions);
+      response = await window.claude.sendMessage(text, imagePaths, sessionId, sessionContext, state.skipPermissions, modelSelect.value);
     } catch (resumeErr) {
       // If --resume failed (JSONL missing), fallback to context approach
       const isResumeFail = resumeErr.message?.includes('No conversation found') || resumeErr.message?.includes('already in use');
       if (currentTab?.resumeFallback && currentTab.sessionContext && isResumeFail) {
         state.currentResponse = '';
         const fallbackId = window.claude.generateUUID();
-        response = await window.claude.sendMessage(text, imagePaths, fallbackId, currentTab.sessionContext, state.skipPermissions);
+        response = await window.claude.sendMessage(text, imagePaths, fallbackId, currentTab.sessionContext, state.skipPermissions, modelSelect.value);
         sessionId = fallbackId;
         currentTab.resumeFallback = false;
       } else {
@@ -947,6 +1200,108 @@ function addAgentLogEntry(text) {
 
   agentLog.prepend(entry);
   while (agentLog.children.length > 50) agentLog.removeChild(agentLog.lastChild);
+}
+
+// ===== Permission Request Handling =====
+window.claude.onPermissionRequest((data) => {
+  showPermissionCard(data);
+});
+
+function showPermissionCard(promptText) {
+  removeTyping();
+
+  // Remove any existing permission card
+  const existing = chatMessages.querySelector('.permission-card');
+  if (existing) existing.remove();
+
+  const card = document.createElement('div');
+  card.className = 'permission-card';
+  card.innerHTML = `
+    <div class="permission-header">
+      <span class="permission-icon">&#128274;</span>
+      <span class="permission-title">Izin Gerekiyor</span>
+    </div>
+    <div class="permission-desc">${escapeHtml(promptText.trim())}</div>
+    <div class="permission-actions">
+      <button class="perm-btn perm-allow">Bu Sefer Izin Ver</button>
+      <button class="perm-btn perm-allow-all">Her Zaman Izin Ver</button>
+      <button class="perm-btn perm-deny">Reddet</button>
+    </div>
+  `;
+  chatMessages.appendChild(card);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+
+  // Re-send message with permissions
+  async function resendWithPermission(enableGlobal) {
+    card.remove();
+    if (enableGlobal) {
+      state.skipPermissions = true;
+      // Update Tam Yetki button visual
+      document.querySelectorAll('.prompt-btn').forEach(btn => {
+        if (btn.dataset.danger === 'true') {
+          btn.classList.add('active');
+          btn.textContent = 'Tam Yetki ON';
+        }
+      });
+    }
+
+    await window.claude.killActiveProcess();
+    showTyping();
+
+    const currentTab = state.chatTabs[state.activeChatTab];
+    let sessionId = currentTab?.sessionId || null;
+    let sessionContext = null;
+
+    if (sessionId) {
+      sessionContext = null;
+    } else {
+      sessionId = window.claude.generateUUID();
+      const tabContext = currentTab?.sessionContext || null;
+      sessionContext = tabContext || '__new__';
+    }
+
+    try {
+      state.currentResponse = '';
+      const response = await window.claude.sendMessage(
+        lastSentMessage, lastSentImagePaths, sessionId, sessionContext, true, modelSelect.value
+      );
+      removeTyping();
+      const streamMsg = chatMessages.querySelector('.message.streaming');
+      if (streamMsg) streamMsg.remove();
+
+      const responseText = (typeof response === 'object' && response !== null) ? response.text : response;
+      if (sessionId && currentTab) currentTab.sessionId = sessionId;
+      if (currentTab) { currentTab.sessionContext = null; currentTab.resumeFallback = false; }
+
+      addMessage('assistant', responseText);
+      extractCodeBlocks(responseText);
+    } catch (err) {
+      removeTyping();
+      addMessage('assistant', `Hata: ${err.message}`);
+    }
+
+    state.isWaiting = false;
+    if (currentTab) { currentTab.isWaiting = false; renderChatTabs(); }
+    sendBtn.disabled = false;
+    chatInput.focus();
+    autoSaveSession();
+  }
+
+  card.querySelector('.perm-allow').onclick = () => resendWithPermission(false);
+  card.querySelector('.perm-allow-all').onclick = () => {
+    showToast('Tam yetki aktif — mesaj yeniden gonderiliyor');
+    resendWithPermission(true);
+  };
+  card.querySelector('.perm-deny').onclick = async () => {
+    card.remove();
+    await window.claude.killActiveProcess();
+    addMessage('assistant', 'Izin reddedildi. Islem iptal edildi.');
+    state.isWaiting = false;
+    const currentTab = state.chatTabs[state.activeChatTab];
+    if (currentTab) { currentTab.isWaiting = false; renderChatTabs(); }
+    sendBtn.disabled = false;
+    chatInput.focus();
+  };
 }
 
 // ===== Messages =====
@@ -1688,11 +2043,54 @@ async function addNewChatTab() {
 async function init() {
   await checkAndRunSetup();
 
-  // Create first tab
-  createChatTab();
-  renderChatTabs();
+  // Load total token count from settings
+  state.totalTokens = await window.claude.getTotalTokens() || 0;
+  updateTokenDisplay();
 
-  showWelcome();
+  // Try to restore previous tabs from last session
+  let tabsRestored = false;
+  const savedTabsData = localStorage.getItem('claude-ui-open-tabs');
+  if (savedTabsData) {
+    try {
+      const { tabs, activeTab } = JSON.parse(savedTabsData);
+      if (tabs && tabs.length > 0 && tabs.some(t => t.hasMessages)) {
+        for (const tabData of tabs) {
+          if (tabData.hasMessages && tabData.filename) {
+            try {
+              const content = await window.claude.loadSession(tabData.filename, '');
+              if (content) {
+                loadSessionIntoTab(content, tabData.filename);
+                // Override tab label with saved label
+                const newTab = state.chatTabs[state.chatTabs.length - 1];
+                if (tabData.label) newTab.label = tabData.label;
+                if (tabData.sessionId) newTab.sessionId = tabData.sessionId;
+                tabsRestored = true;
+                continue;
+              }
+            } catch (e) { console.error('Tab restore load error:', e); }
+          }
+          // Empty tab or file not found — create with label
+          createChatTab(tabData.label || undefined);
+        }
+        if (tabsRestored) {
+          const target = Math.min(activeTab || 0, state.chatTabs.length - 1);
+          switchToTab(target);
+          renderChatTabs();
+          showToast('Onceki sekmeler geri yuklendi');
+        }
+      }
+    } catch (e) {
+      console.error('Tab restore error:', e);
+    }
+    localStorage.removeItem('claude-ui-open-tabs');
+  }
+
+  if (!tabsRestored) {
+    // Create first tab (fresh start)
+    createChatTab();
+    renderChatTabs();
+    showWelcome();
+  }
 
   // Acilista terminal oturumlarini sync et
   try {
@@ -1712,16 +2110,21 @@ async function init() {
     }
   }, 2 * 60 * 1000);
 
-  // Uygulama kapanirken tum tab'lari kaydet
+  // Uygulama kapanirken tum tab'lari kaydet + sekme durumunu localStorage'a yaz
   window.addEventListener('beforeunload', (e) => {
-    const tabsToSave = state.chatTabs.filter(tab => tab.messages && tab.messages.length >= 2);
-    if (tabsToSave.length > 0) {
-      // Senkron IPC ile kaydet (beforeunload'da async calismaz)
-      for (const tab of tabsToSave) {
-        const msgs = tab.messages || [];
-        const codes = tab.codeBlocks || [];
-        const content = generateSessionMarkdownFor(msgs, codes);
+    // Save total tokens (sync - beforeunload can't do async reliably)
+    window.claude.saveTotalTokensSync(state.totalTokens);
 
+    saveCurrentTabState();
+
+    const tabRestoreData = [];
+
+    for (const tab of state.chatTabs) {
+      const msgs = tab.messages || [];
+      const hasMessages = msgs.length >= 2;
+
+      let filename = '';
+      if (hasMessages) {
         const today = new Date().toISOString().split('T')[0];
         const topicText = msgs.slice(0, 20).map(m => m.text || '').join(' ');
         const topic = detectTopic(topicText);
@@ -1733,10 +2136,28 @@ async function init() {
           slug = firstUserMsg.substring(0, 40).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
         }
         const tabSuffix = (tab.tabNum && tab.tabNum > 1) ? `_t${tab.tabNum}` : '';
-        const filename = `${today}_${slug}${tabSuffix}.md`;
+        filename = `${today}_${slug}${tabSuffix}.md`;
+
+        // Save session content (sync — beforeunload can't do async)
+        const codes = tab.codeBlocks || [];
+        const content = generateSessionMarkdownFor(msgs, codes);
         window.claude.saveSessionSync(filename, content);
       }
+
+      tabRestoreData.push({
+        label: tab.label,
+        sessionId: tab.sessionId || null,
+        filename: filename,
+        dialogEnded: tab.dialogEnded || false,
+        hasMessages: hasMessages
+      });
     }
+
+    // Save tab state for restoration on next launch
+    localStorage.setItem('claude-ui-open-tabs', JSON.stringify({
+      tabs: tabRestoreData,
+      activeTab: state.activeChatTab
+    }));
   });
 }
 

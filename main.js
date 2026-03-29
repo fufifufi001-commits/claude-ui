@@ -140,7 +140,20 @@ ipcMain.on('window-close', () => mainWindow?.close());
 // ---- IPC: Claude CLI ----
 const crypto = require('crypto');
 
-ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, sessionContext, skipPermissions) => {
+let activeProcess = null;
+
+function isPermissionPrompt(text) {
+  const t = text.toLowerCase();
+  return (
+    (t.includes('allow') && (t.includes('?') || t.includes('y/n') || t.includes('yes') || t.includes('permission'))) ||
+    (t.includes('do you want to') && t.includes('?')) ||
+    t.includes('permission required') ||
+    (t.includes('waiting for') && t.includes('permission')) ||
+    (t.includes('approve') && t.includes('?'))
+  );
+}
+
+ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, sessionContext, skipPermissions, model) => {
   const settings = loadSettings() || {};
   const claudeCmd = settings.claudePath || 'claude';
   const cwd = settings.workingDir || process.cwd();
@@ -156,7 +169,12 @@ ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, s
   }
 
   return new Promise((resolve, reject) => {
-    const args = ['-p', '--verbose'];
+    const args = ['-p', '--verbose', '--output-format', 'stream-json'];
+
+    // Model selection
+    if (model && model !== 'default') {
+      args.push('--model', model);
+    }
 
     // Skip all permission checks if enabled
     if (skipPermissions) {
@@ -185,36 +203,132 @@ ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, s
 
     // Spawn with piped stdin - write message there (avoids shell encoding issues)
     const proc = spawn(claudeCmd, args, { shell: true, cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    activeProcess = proc;
 
     // Send message via stdin and close it
     proc.stdin.write(fullMessage, 'utf-8');
     proc.stdin.end();
 
-    let output = '';
+    let resultText = '';
     let errorOutput = '';
+    let jsonBuffer = '';
 
     proc.stdout.on('data', (data) => {
-      const chunk = data.toString();
-      output += chunk;
-      mainWindow?.webContents.send('claude-stream', chunk);
+      jsonBuffer += data.toString();
+      // Process complete JSON lines
+      const lines = jsonBuffer.split('\n');
+      jsonBuffer = lines.pop(); // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const evt = JSON.parse(line);
+          mainWindow?.webContents.send('claude-event', evt);
+
+          // Extract text for streaming display
+          if (evt.type === 'assistant') {
+            const content = evt.message?.content;
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (block.type === 'text') {
+                  mainWindow?.webContents.send('claude-stream', block.text);
+                }
+              }
+            }
+          } else if (evt.type === 'result') {
+            resultText = evt.result || '';
+            // Send final token/cost data
+            mainWindow?.webContents.send('token-update', {
+              type: 'result',
+              costUsd: evt.total_cost_usd || 0,
+              durationMs: evt.duration_ms || 0,
+              usage: evt.usage || {},
+              modelUsage: evt.modelUsage || {}
+            });
+          }
+        } catch (e) {
+          // Not valid JSON — treat as plain text stream
+          mainWindow?.webContents.send('claude-stream', line);
+        }
+      }
     });
 
     proc.stderr.on('data', (data) => {
-      errorOutput += data.toString();
-      mainWindow?.webContents.send('claude-agent-log', data.toString());
+      const text = data.toString();
+      errorOutput += text;
+      mainWindow?.webContents.send('claude-agent-log', text);
+      // Detect permission prompts and notify renderer
+      if (!skipPermissions && isPermissionPrompt(text)) {
+        mainWindow?.webContents.send('claude-permission-request', text);
+      }
     });
 
     proc.on('close', (code) => {
+      activeProcess = null;
+      // Process any remaining buffer
+      if (jsonBuffer.trim()) {
+        try {
+          const evt = JSON.parse(jsonBuffer);
+          mainWindow?.webContents.send('claude-event', evt);
+          if (evt.type === 'result') {
+            resultText = evt.result || '';
+            mainWindow?.webContents.send('token-update', {
+              type: 'result',
+              costUsd: evt.total_cost_usd || 0,
+              durationMs: evt.duration_ms || 0,
+              usage: evt.usage || {},
+              modelUsage: evt.modelUsage || {}
+            });
+          }
+        } catch (e) {}
+      }
       // Clean up temp files
       if (contextFile) { try { fs.unlinkSync(contextFile); } catch (e) {} }
 
       if (code === 0) {
-        resolve({ text: output, sessionId: sessionId });
+        resolve({ text: resultText, sessionId: sessionId });
       } else {
-        reject(new Error(errorOutput || output || `Process exited with code ${code}`));
+        reject(new Error(errorOutput || resultText || `Process exited with code ${code}`));
       }
     });
   });
+});
+
+// Kill active Claude process (for permission handling)
+ipcMain.handle('kill-active-process', async () => {
+  if (activeProcess) {
+    try { activeProcess.kill(); } catch (e) {}
+    activeProcess = null;
+    return true;
+  }
+  return false;
+});
+
+// ---- IPC: Token Counter ----
+ipcMain.handle('get-total-tokens', async () => {
+  const settings = loadSettings() || {};
+  return settings.totalTokens || 0;
+});
+
+ipcMain.handle('save-total-tokens', async (event, tokens) => {
+  const settings = loadSettings() || {};
+  settings.totalTokens = tokens;
+  saveSettings(settings);
+  return true;
+});
+
+ipcMain.handle('reset-total-tokens', async () => {
+  const settings = loadSettings() || {};
+  settings.totalTokens = 0;
+  saveSettings(settings);
+  return true;
+});
+
+ipcMain.on('save-total-tokens-sync', (event, tokens) => {
+  const settings = loadSettings() || {};
+  settings.totalTokens = tokens;
+  saveSettings(settings);
+  event.returnValue = true;
 });
 
 // Interactive session handlers kept for backward compatibility

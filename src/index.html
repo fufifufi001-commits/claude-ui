@@ -64,6 +64,26 @@
       <span class="titlebar-logo">&#9672; Claude UI</span>
       <span class="titlebar-workdir" id="workdirLabel" title="Calisma dizini secmek icin tikla">Dizin sec...</span>
     </div>
+    <div class="titlebar-center">
+      <select class="model-select" id="modelSelect" title="Model sec">
+        <option value="opus">Opus</option>
+        <option value="sonnet">Sonnet</option>
+        <option value="haiku">Haiku</option>
+      </select>
+      <div class="context-bar" title="Context window kullanimi">
+        <div class="context-fill" id="contextFill"></div>
+        <span class="context-text" id="contextText">0%</span>
+      </div>
+      <span class="token-badge" title="Session token">
+        <span class="token-label">S</span>
+        <span class="token-value" id="sessionTokens">0</span>
+      </span>
+      <span class="token-badge" title="Toplam token (sifirlamak icin x)">
+        <span class="token-label">T</span>
+        <span class="token-value" id="totalTokens">0</span>
+        <button class="token-reset" id="btnResetTokens" title="Sifirla">&times;</button>
+      </span>
+    </div>
     <div class="titlebar-actions">
       <button class="tb-action" id="btnTheme" title="Tema degistir">&#9790;</button>
       <button class="tb-action" id="btnExport" title="Session export (MD)">&#8681;</button>
@@ -203,11 +223,19 @@
           <textarea id="chatInput" placeholder="Mesajinizi yazin... (Ctrl+V ile screenshot yapistirabilirsiniz)" rows="3"></textarea>
           <button id="sendBtn" class="send-btn" title="Gonder (Enter)">&#10148;</button>
         </div>
-        <div class="input-hints">
-          <span>Enter: Gonder</span>
-          <span>Shift+Enter: Yeni satir</span>
-          <span>Ctrl+V: Screenshot yapistir</span>
-          <span>F1: Yardim</span>
+        <div class="status-bar">
+          <div class="status-left">
+            <span class="tool-activity" id="toolActivity">
+              <span class="tool-dot idle" id="toolDot"></span>
+              <span id="toolLabel">Hazir</span>
+            </span>
+            <span class="mcp-status" id="mcpStatus" title="MCP Servers"></span>
+          </div>
+          <div class="status-right">
+            <span class="status-hint">Enter: Gonder</span>
+            <span class="status-hint">Shift+Enter: Satir</span>
+            <span class="status-hint">Ctrl+V: Gorsel</span>
+          </div>
         </div>
       </div>
     </main>

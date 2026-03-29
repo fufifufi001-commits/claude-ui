@@ -21,14 +21,17 @@ contextBridge.exposeInMainWorld('claude', {
   selectDirectoryFor: (purpose) => ipcRenderer.invoke('select-directory-for', purpose),
 
   // Claude communication
-  sendMessage: (message, imagePaths, sessionId, sessionContext, skipPermissions) => ipcRenderer.invoke('send-to-claude', message, imagePaths, sessionId, sessionContext, skipPermissions),
+  sendMessage: (message, imagePaths, sessionId, sessionContext, skipPermissions, model) => ipcRenderer.invoke('send-to-claude', message, imagePaths, sessionId, sessionContext, skipPermissions, model),
   startSession: (workingDir) => ipcRenderer.invoke('start-interactive-session', workingDir),
   sendInteractive: (message) => ipcRenderer.invoke('send-interactive', message),
 
   // Streams
   onStream: (callback) => ipcRenderer.on('claude-stream', (_, data) => callback(data)),
+  onEvent: (callback) => ipcRenderer.on('claude-event', (_, data) => callback(data)),
   onAgentLog: (callback) => ipcRenderer.on('claude-agent-log', (_, data) => callback(data)),
   onSessionEnded: (callback) => ipcRenderer.on('claude-session-ended', (_, code) => callback(code)),
+  onPermissionRequest: (callback) => ipcRenderer.on('claude-permission-request', (_, data) => callback(data)),
+  killActiveProcess: () => ipcRenderer.invoke('kill-active-process'),
 
   // Sessions
   getSessions: () => ipcRenderer.invoke('get-sessions'),
@@ -44,5 +47,12 @@ contextBridge.exposeInMainWorld('claude', {
   saveTempImage: (base64) => ipcRenderer.invoke('save-temp-image', base64),
 
   // Directory
-  selectDirectory: () => ipcRenderer.invoke('select-directory')
+  selectDirectory: () => ipcRenderer.invoke('select-directory'),
+
+  // Token counter
+  onTokenUpdate: (callback) => ipcRenderer.on('token-update', (_, data) => callback(data)),
+  getTotalTokens: () => ipcRenderer.invoke('get-total-tokens'),
+  saveTotalTokens: (tokens) => ipcRenderer.invoke('save-total-tokens', tokens),
+  saveTotalTokensSync: (tokens) => ipcRenderer.sendSync('save-total-tokens-sync', tokens),
+  resetTotalTokens: () => ipcRenderer.invoke('reset-total-tokens')
 });
