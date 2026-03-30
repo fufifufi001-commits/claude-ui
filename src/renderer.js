@@ -23,6 +23,10 @@ let lastSentMessage = null;
 let lastSentImagePaths = [];
 let lastSentTabId = null;
 let permissionPending = false;
+
+// Cancel & BTW queue
+let cancelledByUser = false;
+let btwQueue = [];
 const PERMISSION_REQUIRED_TOOLS = new Set(['Write', 'Edit', 'Bash', 'NotebookEdit']);
 
 // Helper: find tab by ID and check if it's active
@@ -73,6 +77,7 @@ function loadTabState(index) {
   state.codeBlocks = [...tab.codeBlocks];
   state.activeCodeTab = tab.activeCodeTab;
   state.isWaiting = tab.isWaiting || false;
+  toggleWaitingButtons(state.isWaiting);
   state.sessionTokens = tab.sessionTokens || 0;
   updateTokenDisplay();
 }
@@ -470,6 +475,8 @@ function handleSlashCommand(text) {
         '`/help` — Bu yardim mesaji',
         '`/compact` — Konusmayi ozetle (Claude\'a gonderilir)',
         '`/reset-tokens` — Toplam token sayacini sifirla',
+        '`/btw <mesaj>` — Yanit sirasinda ek mesaj kuyruga ekle',
+        '`Escape` — Aktif yaniti iptal et',
         '`exit` veya `quit` — Diyalogu sonlandir'
       ];
       return {
@@ -660,8 +667,15 @@ workdirLabel.onclick = async () => {
 document.addEventListener('keydown', (e) => {
   // F1 - Help
   if (e.key === 'F1') { e.preventDefault(); helpModal.style.display = helpModal.style.display === 'none' ? 'flex' : 'none'; }
-  // Esc - Close modals
-  if (e.key === 'Escape') { helpModal.style.display = 'none'; }
+  // Esc - Cancel active response OR close modals
+  if (e.key === 'Escape') {
+    if (state.isWaiting) {
+      e.preventDefault();
+      cancelActiveResponse();
+    } else {
+      helpModal.style.display = 'none';
+    }
+  }
   // Ctrl+B - Toggle sidebar
   if (e.ctrlKey && e.key === 'b') { e.preventDefault(); $('#sidebar').classList.toggle('collapsed'); }
   // Ctrl+J - Toggle code panel
@@ -689,6 +703,45 @@ document.addEventListener('keydown', (e) => {
     switchToTab(prev);
   }
 });
+
+// ===== Cancel Active Response =====
+async function cancelActiveResponse() {
+  const currentTab = state.chatTabs[state.activeChatTab];
+  const tabId = currentTab?.id || null;
+
+  cancelledByUser = true;
+
+  // Kill the process
+  await window.claude.killActiveProcess(tabId);
+
+  // Capture partial response
+  const partial = state.currentResponse || '';
+  removeTyping();
+  const streamMsg = chatMessages.querySelector('.message.streaming');
+  if (streamMsg) streamMsg.remove();
+
+  if (partial.trim()) {
+    addMessage('assistant', partial + '\n\n*⏹ Yanit iptal edildi.*');
+    extractCodeBlocks(partial);
+  } else {
+    addMessage('assistant', '*⏹ Yanit iptal edildi.*');
+  }
+
+  // Reset state
+  state.isWaiting = false;
+  toggleWaitingButtons(false);
+  state.currentResponse = '';
+  if (currentTab) {
+    currentTab.isWaiting = false;
+    currentTab._currentResponse = '';
+    renderChatTabs();
+  }
+  sendBtn.disabled = false;
+  setToolActivity('idle');
+  btwQueue = []; // Clear queued btw messages
+  chatInput.focus();
+  autoSaveSession();
+}
 
 // ===== Resize Handles =====
 function setupResize(handleId, leftEl, rightEl, direction) {
@@ -952,10 +1005,52 @@ chatInput.addEventListener('input', () => {
 });
 sendBtn.onclick = () => sendMessage();
 
-async function sendMessage() {
-  const text = chatInput.value.trim();
+// Cancel & BTW buttons
+const btnCancel = $('#btnCancel');
+const btnBtw = $('#btnBtw');
+btnCancel.onclick = () => cancelActiveResponse();
+btnBtw.onclick = () => {
+  const btwText = chatInput.value.trim();
+  if (!btwText) {
+    chatInput.value = '/btw ';
+    chatInput.focus();
+  } else {
+    // Prepend /btw if not already there
+    const msg = btwText.startsWith('/btw') ? btwText : '/btw ' + btwText;
+    chatInput.value = msg;
+    sendMessage();
+  }
+};
+
+function toggleWaitingButtons(waiting) {
+  console.log('[DEBUG] toggleWaitingButtons called:', waiting, 'btnCancel:', btnCancel, 'btnBtw:', btnBtw);
+  btnCancel.style.display = waiting ? 'inline-block' : 'none';
+  btnBtw.style.display = waiting ? 'inline-block' : 'none';
+  console.log('[DEBUG] btnCancel.style.display:', btnCancel.style.display, 'btnBtw.style.display:', btnBtw.style.display);
+}
+
+async function sendMessage(overrideText) {
+  const text = overrideText || chatInput.value.trim();
   if (!text && state.pastedImages.length === 0) return;
-  if (state.isWaiting) return;
+
+  // Handle /btw while waiting — queue message for after response completes
+  if (state.isWaiting) {
+    if (text.toLowerCase().startsWith('/btw')) {
+      const btwArgs = text.slice(4).trim();
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+      if (!btwArgs) {
+        addMessage('assistant', '`/btw <mesaj>` — Yanit bittikten sonra ek mesaj gonderir.');
+      } else {
+        btwQueue.push(btwArgs);
+        addMessage('user', text);
+        addMessage('assistant', `📌 Ek mesaj kuyruga eklendi (${btwQueue.length}). Yanit bittikten sonra gonderilecek.`);
+      }
+      chatInput.focus();
+      return;
+    }
+    return;
+  }
 
   // Handle exit command: save session and reset tab
   if (/^(exit|quit|cikis|çıkış)$/i.test(text)) {
@@ -1078,6 +1173,7 @@ async function sendMessage() {
   renderImagePreviews();
 
   state.isWaiting = true;
+  toggleWaitingButtons(true);
   if (currentTab) { currentTab.isWaiting = true; renderChatTabs(); }
   sendBtn.disabled = true;
   showTyping();
@@ -1086,6 +1182,7 @@ async function sendMessage() {
   try {
     state.currentResponse = '';
     if (currentTab) currentTab._currentResponse = '';
+    cancelledByUser = false;
     let response;
     try {
       response = await window.claude.sendMessage(text, imagePaths, sessionId, sessionContext, state.skipPermissions, modelSelect.value, currentTab?.id);
@@ -1124,6 +1221,12 @@ async function sendMessage() {
     addMessage('assistant', responseText);
     extractCodeBlocks(responseText);
   } catch (err) {
+    // If cancelled by user, cancelActiveResponse already handled cleanup
+    if (cancelledByUser) {
+      cancelledByUser = false;
+      return;
+    }
+
     // If permission resend is in progress, don't touch DOM or show errors
     if (permissionPending) {
       return; // resendWithPermission manages everything
@@ -1148,11 +1251,18 @@ async function sendMessage() {
   }
 
   state.isWaiting = false;
+  toggleWaitingButtons(false);
   if (currentTab) { currentTab.isWaiting = false; renderChatTabs(); }
   sendBtn.disabled = false;
   chatInput.focus();
 
   autoSaveSession();
+
+  // Process btw queue — send next queued message automatically
+  if (btwQueue.length > 0) {
+    const nextMsg = btwQueue.shift();
+    setTimeout(() => sendMessage(nextMsg), 300);
+  }
 }
 
 // ===== Streaming =====
@@ -1365,6 +1475,7 @@ function showPermissionCard(promptText) {
 
     permissionPending = false;
     state.isWaiting = false;
+    toggleWaitingButtons(false);
     if (currentTab) { currentTab.isWaiting = false; renderChatTabs(); }
     sendBtn.disabled = false;
     chatInput.focus();
@@ -1384,6 +1495,7 @@ function showPermissionCard(promptText) {
     permissionPending = false;
     addMessage('assistant', 'Izin reddedildi. Islem iptal edildi.');
     state.isWaiting = false;
+    toggleWaitingButtons(false);
     const currentTab = state.chatTabs[state.activeChatTab];
     if (currentTab) { currentTab.isWaiting = false; renderChatTabs(); }
     sendBtn.disabled = false;
