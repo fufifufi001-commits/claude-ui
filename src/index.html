@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="tr" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude UI</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- ===== SETUP WIZARD (ilk calistirmada gorunur) ===== -->
+  <div id="setupWizard" class="setup-overlay" style="display:none;">
+    <div class="setup-box">
+      <div class="setup-header">
+        <h1>&#9672; Claude UI</h1>
+        <p>Hos geldiniz! Baslangic ayarlarini yapalim.</p>
+      </div>
+
+      <!-- Step 1: Claude CLI Check -->
+      <div class="setup-step" id="setupStep1">
+        <div class="step-number">1 / 3</div>
+        <h3>Claude CLI Kontrolu</h3>
+        <div id="cliStatus" class="cli-status"></div>
+        <div class="setup-nav">
+          <span></span>
+          <button class="setup-next" id="step1Next">Devam &rarr;</button>
+        </div>
+      </div>
+
+      <!-- Step 2: History Directory -->
+      <div class="setup-step" id="setupStep2" style="display:none;">
+        <div class="step-number">2 / 3</div>
+        <h3>Session Gecmisi Nereye Kaydedilsin?</h3>
+        <p class="step-desc">Konusmalariniz bu klasore kaydedilecek. Istediginiz zaman degistirebilirsiniz.</p>
+        <div class="setup-path-row">
+          <input type="text" id="setupHistoryDir" class="setup-path-input" readonly>
+          <button class="setup-browse" id="browseHistory">Degistir</button>
+        </div>
+        <div class="setup-nav">
+          <button class="setup-back" id="step2Back">&larr; Geri</button>
+          <button class="setup-next" id="step2Next">Devam &rarr;</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Working Directory -->
+      <div class="setup-step" id="setupStep3" style="display:none;">
+        <div class="step-number">3 / 3</div>
+        <h3>Varsayilan Calisma Dizini</h3>
+        <p class="step-desc">Claude bu dizindeki dosyalarla calisacak. Sonradan da degistirebilirsiniz.</p>
+        <div class="setup-path-row">
+          <input type="text" id="setupWorkDir" class="setup-path-input" readonly>
+          <button class="setup-browse" id="browseWorkDir">Degistir</button>
+        </div>
+        <div class="setup-nav">
+          <button class="setup-back" id="step3Back">&larr; Geri</button>
+          <button class="setup-next setup-finish" id="setupComplete">Basla! &#10003;</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Custom Title Bar -->
+  <div id="titlebar">
+    <div class="titlebar-drag">
+      <span class="titlebar-logo">&#9672; Claude UI</span>
+      <span class="titlebar-workdir" id="workdirLabel" title="Calisma dizini secmek icin tikla">Dizin sec...</span>
+    </div>
+    <div class="titlebar-center">
+      <select class="model-select" id="modelSelect" title="Model sec">
+        <option value="opus">Opus</option>
+        <option value="sonnet">Sonnet</option>
+        <option value="haiku">Haiku</option>
+      </select>
+      <div class="context-bar" title="Context window kullanimi">
+        <div class="context-fill" id="contextFill"></div>
+        <span class="context-text" id="contextText">0%</span>
+      </div>
+      <span class="token-badge" title="Session token">
+        <span class="token-label">S</span>
+        <span class="token-value" id="sessionTokens">0</span>
+      </span>
+      <span class="token-badge" title="Toplam token (sifirlamak icin x)">
+        <span class="token-label">T</span>
+        <span class="token-value" id="totalTokens">0</span>
+        <button class="token-reset" id="btnResetTokens" title="Sifirla">&times;</button>
+      </span>
+    </div>
+    <div class="titlebar-actions">
+      <button class="tb-action" id="btnTheme" title="Tema degistir">&#9790;</button>
+      <button class="tb-action" id="btnExport" title="Session export (MD)">&#8681;</button>
+      <button class="tb-action" id="btnHelp" title="Yardim (F1)">?</button>
+    </div>
+    <div class="titlebar-controls">
+      <button class="tb-btn" id="btnMin">&#x2014;</button>
+      <button class="tb-btn" id="btnMax">&#9744;</button>
+      <button class="tb-btn tb-close" id="btnClose">&#10005;</button>
+    </div>
+  </div>
+
+  <!-- Help Modal (overlay - no space) -->
+  <div id="helpModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Claude UI Rehberi</h2>
+        <button class="modal-close" id="helpClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="help-section">
+          <h3>Kisayollar</h3>
+          <div class="help-grid">
+            <kbd>Enter</kbd> <span>Mesaj gonder</span>
+            <kbd>Shift+Enter</kbd> <span>Yeni satir</span>
+            <kbd>Ctrl+V</kbd> <span>Screenshot yapistir</span>
+            <kbd>Ctrl+Shift+S</kbd> <span>Session kaydet</span>
+            <kbd>Ctrl+Shift+E</kbd> <span>Session export</span>
+            <kbd>Ctrl+B</kbd> <span>Sol panel ac/kapat</span>
+            <kbd>Ctrl+J</kbd> <span>Kod paneli ac/kapat</span>
+            <kbd>Ctrl+T</kbd> <span>Tema degistir</span>
+            <kbd>F1</kbd> <span>Bu yardim ekrani</span>
+            <kbd>Esc</kbd> <span>Modal kapat</span>
+          </div>
+        </div>
+        <div class="help-section">
+          <h3>Paneller</h3>
+          <p><strong>Sol panel:</strong> Gecmis session'lar ve agent/skill log'lari. Daraltilaabilir.</p>
+          <p><strong>Orta panel:</strong> Claude ile sohbet alani. Screenshot yapistirma destekler.</p>
+          <p><strong>Sag panel:</strong> Kod bloklari otomatik ayristirilir. Tiklayarak da ekleyebilirsiniz.</p>
+          <p>Panel genisliklerini kenarlardaki cizgileri surukleyerek ayarlayabilirsiniz.</p>
+        </div>
+        <div class="help-section">
+          <h3>Screenshot Yapistirma</h3>
+          <p>Ekran goruntusu alin (Win+Shift+S), sonra sohbet kutusuna <kbd>Ctrl+V</kbd> ile yapistirin. Paint'e kaydetmenize gerek yok!</p>
+          <p>Surukle-birak ile de gorsel ekleyebilirsiniz.</p>
+        </div>
+        <div class="help-section">
+          <h3>Session Yonetimi</h3>
+          <p>Konusmalar otomatik olarak <code>D:\ClaudeHistory\</code> klasorune kaydedilir.</p>
+          <p>Sol panelden gecmis session'lara erisebilir, arama yapabilirsiniz.</p>
+          <p>Baslik cubugundaki &#8681; butonu ile session'i MD dosyasi olarak export edebilirsiniz.</p>
+        </div>
+        <div class="help-section">
+          <h3>Prompt Sablonlari</h3>
+          <p>Mesaj kutusunun ustundeki hizli butonlari kullanarak sik kullanilan komutlari tek tikla ekleyebilirsiniz.</p>
+        </div>
+        <div class="help-section">
+          <h3>Gereksinimler</h3>
+          <p>Claude Code CLI'in sisteminizde kurulu ve PATH'te tanimli olmasi gerekir.</p>
+          <p><code>claude --version</code> komutuyla kontrol edebilirsiniz.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Layout -->
+  <div id="app">
+    <!-- Left Sidebar (collapsible) -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-toggle" id="sidebarToggle" title="Paneli ac/kapat (Ctrl+B)">&#9776;</div>
+      <div class="sidebar-content">
+        <!-- History Section -->
+        <div class="sidebar-section">
+          <h3 class="sidebar-title">&#128197; Gecmis</h3>
+          <div class="session-search">
+            <input type="text" id="sessionSearch" placeholder="Ara...">
+            <button id="btnSyncTerminal" class="sync-btn" title="Terminal oturumlarini sync et">&#x1F504;</button>
+          </div>
+          <div id="sessionList" class="session-list"></div>
+        </div>
+        <!-- Agent/Skill Log Section -->
+        <div class="sidebar-section">
+          <h3 class="sidebar-title">&#9889; Agent & Skill</h3>
+          <div id="agentLog" class="agent-log"></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Resize handle -->
+    <div class="resize-handle" id="resizeLeft"></div>
+
+    <!-- Chat Panel -->
+    <main id="chatPanel" class="chat-panel">
+      <!-- Chat Tabs -->
+      <div class="chat-tabs-bar">
+        <div class="chat-tabs-list" id="chatTabsList">
+          <!-- tabs rendered by JS, + button included inside -->
+        </div>
+      </div>
+      <div id="chatMessages" class="chat-messages"></div>
+
+      <!-- Image preview area -->
+      <div id="imagePreview" class="image-preview" style="display:none;"></div>
+
+      <!-- Prompt templates (dynamic, editable) -->
+      <div class="prompt-templates" id="promptTemplates">
+        <!-- Buttons rendered by JS -->
+        <button class="action-btn action-btn-cancel" id="btnCancel" title="Yaniti iptal et (Escape)" style="display:none;">⏹ Durdur</button>
+        <button class="action-btn action-btn-btw" id="btnBtw" title="Ek mesaj ekle (/btw)" style="display:none;">📌 Btw</button>
+        <button class="prompt-edit-btn" id="editTemplatesBtn" title="Sablonlari duzenle">&#9881;</button>
+      </div>
+
+      <!-- Template Editor Modal -->
+      <div id="templateModal" class="modal-overlay" style="display:none;">
+        <div class="modal" style="width:500px;">
+          <div class="modal-header">
+            <h2>Prompt Sablonlarini Duzenle</h2>
+            <button class="modal-close" id="templateModalClose">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div id="templateList" class="template-list"></div>
+            <div class="template-add">
+              <input type="text" id="newTemplateLabel" placeholder="Buton adi (orn: Hata Bul)" class="template-input">
+              <input type="text" id="newTemplatePrompt" placeholder="Prompt metni (orn: Bu kodda hata var mi?)" class="template-input" style="flex:2;">
+              <button id="addTemplateBtn" class="template-add-btn">+ Ekle</button>
+            </div>
+            <div class="template-hint">Surukleyerek siralayabilirsiniz. Varsayilanlara donmek icin "Sifirla" butonunu kullanin.</div>
+            <div class="template-actions">
+              <button id="resetTemplatesBtn" class="template-reset-btn">Sifirla</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input area -->
+      <div class="chat-input-area">
+        <div class="input-wrapper">
+          <textarea id="chatInput" placeholder="Mesajinizi yazin... (Ctrl+V ile screenshot yapistirabilirsiniz)" rows="3"></textarea>
+          <button id="sendBtn" class="send-btn" title="Gonder (Enter)">&#10148;</button>
+        </div>
+        <div class="status-bar">
+          <div class="status-left">
+            <span class="tool-activity" id="toolActivity">
+              <span class="tool-dot idle" id="toolDot"></span>
+              <span id="toolLabel">Hazir</span>
+            </span>
+            <span class="mcp-status" id="mcpStatus" title="MCP Servers"></span>
+          </div>
+          <div class="status-right">
+            <span class="status-hint">Enter: Gonder</span>
+            <span class="status-hint">Shift+Enter: Satir</span>
+            <span class="status-hint">Ctrl+V: Gorsel</span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Resize handle -->
+    <div class="resize-handle" id="resizeRight"></div>
+
+    <!-- Code Panel Toggle (visible when collapsed) -->
+    <div class="code-panel-reopen" id="codePanelReopen" title="Kod panelini ac (Ctrl+J)" style="display:none;">&#128196;</div>
+
+    <!-- Code Panel -->
+    <aside id="codePanel" class="code-panel">
+      <div class="code-header">
+        <div class="code-header-top">
+          <h3>&#128196; Kod</h3>
+          <button class="code-panel-toggle" id="codePanelToggle" title="Paneli kapat (Ctrl+J)">&#10005;</button>
+        </div>
+        <div class="code-tabs" id="codeTabs"></div>
+      </div>
+      <div id="codeContent" class="code-content">
+        <div class="code-placeholder">Kod bloklari burada gorunecek<br><br><span style="font-size:11px;color:var(--text-muted);">Sohbetteki kod bloklarina tiklayarak<br>buraya gonderebilirsiniz</span></div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
