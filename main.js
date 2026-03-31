@@ -1,7 +1,8 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, execSync } = require('child_process');
+const os = require('os');
 
 // ---- Settings / Config ----
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'claude-ui-settings.json');
@@ -289,10 +290,12 @@ ipcMain.handle('send-to-claude', async (event, message, imagePaths, sessionId, s
       // Clean up temp files
       if (contextFile) { try { fs.unlinkSync(contextFile); } catch (e) {} }
 
-      if (code === 0) {
+      // If we got a result text from stream-json, treat as success regardless of exit code
+      // Claude CLI sometimes exits non-zero even after sending valid responses
+      if (resultText || code === 0) {
         resolve({ text: resultText, sessionId: sessionId });
       } else {
-        reject(new Error(errorOutput || resultText || `Process exited with code ${code}`));
+        reject(new Error(errorOutput || `Process exited with code ${code}`));
       }
     });
   });
@@ -748,4 +751,100 @@ ipcMain.handle('select-directory', async () => {
     properties: ['openDirectory']
   });
   return result.canceled ? null : result.filePaths[0];
+});
+
+// ---- IPC: Terminal (PowerShell via spawn) ----
+const terminals = new Map(); // id -> { proc, cols, rows }
+let terminalIdCounter = 0;
+
+ipcMain.handle('terminal:create', async () => {
+  const id = ++terminalIdCounter;
+  const settings = loadSettings() || {};
+  const cwd = settings.workingDir || os.homedir();
+  const shell = process.platform === 'win32' ? 'cmd.exe' : (process.env.SHELL || '/bin/bash');
+  const args = process.platform === 'win32' ? ['/Q', '/K'] : [];
+
+  const proc = spawn(shell, args, {
+    cwd,
+    env: { ...process.env, TERM: 'xterm-256color' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+    shell: false
+  });
+
+  terminals.set(id, { proc, shell });
+
+  proc.stdout.on('data', (data) => {
+    mainWindow?.webContents.send('terminal:data', id, data.toString());
+  });
+
+  proc.stderr.on('data', (data) => {
+    mainWindow?.webContents.send('terminal:data', id, data.toString());
+  });
+
+  proc.on('exit', (code) => {
+    terminals.delete(id);
+    mainWindow?.webContents.send('terminal:exit', id, code);
+  });
+
+  return { id, shell };
+});
+
+ipcMain.handle('terminal:write', async (event, id, data) => {
+  const term = terminals.get(id);
+  if (term?.proc?.stdin?.writable) {
+    term.proc.stdin.write(data);
+    return true;
+  }
+  return false;
+});
+
+ipcMain.handle('terminal:kill', async (event, id) => {
+  const term = terminals.get(id);
+  if (term) {
+    try { term.proc.kill(); } catch (e) {}
+    terminals.delete(id);
+    return true;
+  }
+  return false;
+});
+
+ipcMain.handle('terminal:get-output', async (event, id) => {
+  // Terminal output is streamed live; this is a placeholder for future buffer access
+  return '';
+});
+
+// ---- IPC: Web Preview (iframe-based, managed from renderer) ----
+// Preview is now rendered as an iframe in the renderer process.
+// These handlers remain for screenshot functionality.
+
+ipcMain.handle('preview:create', async () => true);
+ipcMain.handle('preview:navigate', async () => true);
+ipcMain.handle('preview:set-bounds', async () => true);
+ipcMain.handle('preview:hide', async () => true);
+ipcMain.handle('preview:refresh', async () => true);
+
+ipcMain.handle('preview:screenshot', async () => {
+  // Capture the entire window and crop to preview area
+  // The renderer will send the preview bounds for cropping
+  try {
+    const image = await mainWindow.webContents.capturePage();
+    const pngBuffer = image.toPNG();
+    const tempDir = path.join(app.getPath('temp'), 'claude-ui-screenshots');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    const filePath = path.join(tempDir, `preview_${Date.now()}.png`);
+    fs.writeFileSync(filePath, pngBuffer);
+    return { path: filePath, base64: pngBuffer.toString('base64') };
+  } catch (e) {
+    return null;
+  }
+});
+
+ipcMain.handle('preview:get-url', async () => '');
+
+// Clean up terminals on quit
+app.on('before-quit', () => {
+  for (const [id, term] of terminals) {
+    try { term.proc.kill(); } catch (e) {}
+  }
+  terminals.clear();
 });

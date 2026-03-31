@@ -503,16 +503,16 @@ function handleSlashCommand(text) {
 // ===== Sidebar Toggle =====
 $('#sidebarToggle').onclick = () => $('#sidebar').classList.toggle('collapsed');
 
-// ===== Code Panel Toggle =====
-function toggleCodePanel() {
-  const panel = $('#codePanel');
+// ===== Right Panel Toggle =====
+function toggleRightPanel() {
+  const panel = $('#rightPanel');
   const reopen = $('#codePanelReopen');
   panel.classList.toggle('collapsed');
   const isCollapsed = panel.classList.contains('collapsed');
   reopen.style.display = isCollapsed ? 'flex' : 'none';
 }
-$('#codePanelToggle').onclick = toggleCodePanel;
-$('#codePanelReopen').onclick = toggleCodePanel;
+$('#rightPanelToggle').onclick = toggleRightPanel;
+$('#codePanelReopen').onclick = toggleRightPanel;
 
 // ===== Theme Toggle =====
 $('#btnTheme').onclick = toggleTheme;
@@ -576,14 +576,14 @@ function exportSession() {
 }
 
 // ===== Toast =====
-function showToast(text) {
+function showToast(text, type, duration) {
   const existing = document.querySelector('.toast');
   if (existing) existing.remove();
   const toast = document.createElement('div');
-  toast.className = 'toast';
+  toast.className = 'toast' + (type ? ' ' + type : '');
   toast.textContent = text;
   document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 2500);
+  setTimeout(() => toast.remove(), duration || 2500);
 }
 
 // ===== Custom Prompt Dialog =====
@@ -679,7 +679,8 @@ document.addEventListener('keydown', (e) => {
   // Ctrl+B - Toggle sidebar
   if (e.ctrlKey && e.key === 'b') { e.preventDefault(); $('#sidebar').classList.toggle('collapsed'); }
   // Ctrl+J - Toggle code panel
-  if (e.ctrlKey && e.key === 'j') { e.preventDefault(); toggleCodePanel(); }
+  if (e.ctrlKey && e.key === 'j') { e.preventDefault(); toggleRightPanel(); }
+  if (e.ctrlKey && e.key === '`') { e.preventDefault(); toggleTerminalPanel(); }
   // Ctrl+T - Toggle theme
   if (e.ctrlKey && e.key === 't') { e.preventDefault(); toggleTheme(); }
   // Ctrl+Shift+S - Save session
@@ -772,7 +773,10 @@ function setupResize(handleId, leftEl, rightEl, direction) {
 }
 
 setupResize('#resizeLeft', '#sidebar', null, 'left');
-setupResize('#resizeRight', null, '#codePanel', 'right');
+setupResize('#resizeRight', null, '#rightPanel', 'right');
+
+// Vertical resize for terminal panel
+setupResizeVertical('#resizeBottom', '#upperPanels', '#terminalPanel');
 
 // ===== Screenshot Paste =====
 chatInput.addEventListener('paste', async (e) => {
@@ -1325,7 +1329,7 @@ function updateStreamingCodePanel(content) {
     streamingCodeLang = lang;
 
     // Ensure code panel is visible
-    $('#codePanel').classList.remove('collapsed');
+    $('#rightPanel').classList.remove('collapsed');
 
     // Show live code
     codeContent.innerHTML = `
@@ -1538,7 +1542,7 @@ function renderMessageToDOM(role, text, images) {
         const code = codeEl ? codeEl.textContent : pre.textContent;
         const langMatch = codeEl?.className?.match(/lang-(\w+)/);
         const lang = langMatch ? langMatch[1] : 'text';
-        $('#codePanel').classList.remove('collapsed');
+        $('#rightPanel').classList.remove('collapsed');
         state.codeBlocks.push({ lang, code, id: state.codeBlocks.length });
         state.activeCodeTab = state.codeBlocks.length - 1;
         renderCodePanel();
@@ -1549,12 +1553,41 @@ function renderMessageToDOM(role, text, images) {
     if (msg.querySelectorAll('pre').length > 0) {
       msg.addEventListener('click', () => {
         if (state.codeBlocks.length > 0) {
-          $('#codePanel').classList.remove('collapsed');
+          $('#rightPanel').classList.remove('collapsed');
           state.activeCodeTab = state.codeBlocks.length - 1;
           renderCodePanel();
         }
       });
     }
+
+    // "Terminalde Calistir" butonlari
+    msg.querySelectorAll('.code-run-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const cmd = btn.dataset.cmd;
+        if (cmd && activeTerminalId) {
+          // Show terminal if collapsed
+          const termPanel = $('#terminalPanel');
+          if (termPanel.classList.contains('collapsed')) toggleTerminalPanel();
+          window.claude.writeTerminal(activeTerminalId, cmd + '\r\n');
+          showToast('Komut terminale gonderildi');
+        } else if (!activeTerminalId) {
+          showToast('Terminal aktif degil', 'error');
+        }
+      });
+    });
+
+    // "Kopyala" butonlari (inline code blocks)
+    msg.querySelectorAll('.code-copy-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(btn.dataset.code).then(() => {
+          btn.textContent = 'Kopyalandi!';
+          btn.classList.add('copied');
+          setTimeout(() => { btn.textContent = 'Kopyala'; btn.classList.remove('copied'); }, 2000);
+        });
+      });
+    });
   }
 
   return msg;
@@ -1587,9 +1620,14 @@ function formatMarkdown(text) {
 
   // Code blocks with language + syntax highlighting
   // Note: code is already escaped by the top-level escapeHtml, so use highlightEscaped
+  const terminalLangs = new Set(['bash', 'shell', 'sh', 'cmd', 'powershell', 'ps1', 'bat', 'terminal', 'zsh']);
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
     const highlighted = highlightEscaped(code.trim(), lang || 'text');
-    return `<pre><code class="lang-${lang || 'text'}">${highlighted}</code></pre>`;
+    const isTerminal = terminalLangs.has((lang || '').toLowerCase());
+    const runBtn = isTerminal
+      ? `<button class="code-run-btn" data-cmd="${code.trim().replace(/"/g, '&quot;')}" title="Terminalde calistir">&#9654; Calistir</button>`
+      : '';
+    return `<div class="code-block-inline"><div class="code-block-inline-header"><span class="code-block-lang">${lang || 'text'}</span><div class="code-block-actions">${runBtn}<button class="code-copy-btn" data-code="${code.trim().replace(/"/g, '&quot;')}" title="Kopyala">Kopyala</button></div></div><pre><code class="lang-${lang || 'text'}">${highlighted}</code></pre></div>`;
   });
 
   // Inline code
@@ -2127,11 +2165,13 @@ function generateSessionMarkdownFor(msgs, codes, topic, sessionId, dialogStatus)
 function showWelcome() {
   chatMessages.innerHTML = `
     <div class="welcome">
-      <h2>&#9672; Claude UI</h2>
-      <p>Claude Code icin gorsel arayuz.<br>
-      Mesaj yazin, screenshot yapistirin, kodlarinizi takip edin.</p>
+      <h2>&#9672; Claude UI Studio</h2>
+      <p>Claude Code Developer Studio.<br>
+      Chat, terminal, web preview ve gorsel test — hepsi bir arada.</p>
       <p style="font-size:11px;color:var(--text-muted);">
-        Ipucu: <kbd style="background:var(--bg-tertiary);padding:2px 6px;border-radius:3px;font-size:10px;">Ctrl+V</kbd> ile ekran goruntusu yapistirabilirsiniz
+        <kbd style="background:var(--bg-tertiary);padding:2px 6px;border-radius:3px;font-size:10px;">Ctrl+V</kbd> screenshot
+        &nbsp;&middot;&nbsp;
+        <kbd style="background:var(--bg-tertiary);padding:2px 6px;border-radius:3px;font-size:10px;">Ctrl+\`</kbd> terminal
         &nbsp;&middot;&nbsp;
         <kbd style="background:var(--bg-tertiary);padding:2px 6px;border-radius:3px;font-size:10px;">F1</kbd> yardim
       </p>
@@ -2360,4 +2400,638 @@ async function init() {
   });
 }
 
+// ===== Vertical Resize (Terminal Panel) =====
+function setupResizeVertical(handleSel, topSel, bottomSel) {
+  const handle = $(handleSel);
+  const topEl = $(topSel);
+  const bottomEl = $(bottomSel);
+  if (!handle || !topEl || !bottomEl) return;
+
+  let startY, startTopH, startBottomH;
+
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    startY = e.clientY;
+    startTopH = topEl.offsetHeight;
+    startBottomH = bottomEl.offsetHeight;
+    handle.classList.add('active');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  function onMove(e) {
+    const dy = e.clientY - startY;
+    const newTopH = startTopH + dy;
+    const newBottomH = startBottomH - dy;
+    const minBottom = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--terminal-min-height')) || 80;
+    if (newBottomH < minBottom || newTopH < 200) return;
+    topEl.style.height = newTopH + 'px';
+    topEl.style.flex = 'none';
+    bottomEl.style.height = newBottomH + 'px';
+    // Refit terminal
+    if (terminalFitAddon) {
+      try { terminalFitAddon.fit(); } catch(e) {}
+    }
+  }
+
+  function onUp() {
+    handle.classList.remove('active');
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+  }
+}
+
+// ===== Terminal Controller =====
+let terminalInstance = null;
+let terminalFitAddon = null;
+let activeTerminalId = null;
+let terminalOutputBuffer = [];
+const MAX_TERMINAL_BUFFER = 5000; // lines
+
+const DEV_SERVER_PATTERNS = [
+  /(?:https?:\/\/)?localhost:(\d+)/i,
+  /(?:https?:\/\/)?127\.0\.0\.1:(\d+)/i,
+  /ready on .*?port\s*(\d+)/i,
+  /listening on .*?:(\d+)/i,
+  /started (?:server )?on .*?:(\d+)/i,
+  /Local:\s*https?:\/\/localhost:(\d+)/i
+];
+
+async function initTerminal() {
+  const container = $('#terminalContainer');
+  if (!container || terminalInstance) return;
+
+  // xterm.js UMD exports: globalThis.Terminal (xterm) and globalThis.FitAddon (addon-fit)
+  // In Electron renderer with contextIsolation, they land on globalThis/window
+  const TerminalClass = globalThis.Terminal?.Terminal || globalThis.Terminal || window.Terminal?.Terminal || window.Terminal;
+  const FitAddonClass = globalThis.FitAddon?.FitAddon || globalThis.FitAddon || window.FitAddon?.FitAddon || window.FitAddon;
+
+  if (!TerminalClass) {
+    container.innerHTML = '<div style="color:#f87171;padding:20px;">xterm.js yuklenemedi. Terminal devre disi.</div>';
+    console.error('xterm.js not found on globalThis or window');
+    return;
+  }
+
+  terminalFitAddon = FitAddonClass ? new FitAddonClass() : null;
+
+  terminalInstance = new TerminalClass({
+    theme: {
+      background: '#0a0a0a',
+      foreground: '#e4e4e7',
+      cursor: '#8b5cf6',
+      cursorAccent: '#0a0a0a',
+      selectionBackground: 'rgba(139, 92, 246, 0.3)',
+      black: '#1a1b2e',
+      red: '#f87171',
+      green: '#34d399',
+      yellow: '#fbbf24',
+      blue: '#60a5fa',
+      magenta: '#c084fc',
+      cyan: '#22d3ee',
+      white: '#e4e4e7',
+      brightBlack: '#6b7280',
+      brightRed: '#fca5a5',
+      brightGreen: '#6ee7b7',
+      brightYellow: '#fde68a',
+      brightBlue: '#93c5fd',
+      brightMagenta: '#d8b4fe',
+      brightCyan: '#67e8f9',
+      brightWhite: '#ffffff'
+    },
+    fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+    fontSize: 13,
+    lineHeight: 1.2,
+    cursorBlink: true,
+    cursorStyle: 'bar',
+    scrollback: 5000,
+    allowProposedApi: true
+  });
+
+  if (terminalFitAddon) terminalInstance.loadAddon(terminalFitAddon);
+  terminalInstance.open(container);
+
+  // Fit after a brief delay for layout to settle
+  setTimeout(() => {
+    try { terminalFitAddon.fit(); } catch(e) {}
+  }, 100);
+
+  // === Local Line Editing Terminal ===
+  // Since we use child_process.spawn (no PTY), PowerShell doesn't do interactive
+  // line editing. We handle all editing locally in xterm.js and only send
+  // complete lines to stdin on Enter.
+
+  let lineBuffer = '';        // current input line
+  let cursorPos = 0;          // cursor position within lineBuffer
+  let commandHistory = [];    // history of executed commands
+  let historyIndex = -1;      // current history navigation index
+  let isRunningCommand = false; // true while a command is executing
+  let savedLine = '';         // saved line when navigating history
+  let lastOutputTime = 0;     // timestamp of last process output
+  let promptReady = false;    // true when we see a prompt (> at end of output)
+  let pendingEchoSuppress = null; // command text to strip from next output (suppress echo)
+  let justPasted = false;         // flag to prevent double paste from xterm
+
+  // Create terminal process
+  const result = await window.claude.createTerminal();
+  if (result) {
+    activeTerminalId = result.id;
+    $('#terminalShellLabel').textContent = result.shell || 'shell';
+  }
+
+  // Custom key handler — intercepts BEFORE xterm processes the key
+  // Used for Ctrl+C copy (so selection isn't cleared) and Ctrl+V paste
+  terminalInstance.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown') return true;
+
+    // Ctrl+C: copy if selection, otherwise let onData handle kill
+    if (e.ctrlKey && e.key === 'c') {
+      const sel = terminalInstance.getSelection();
+      if (sel) {
+        navigator.clipboard.writeText(sel);
+        terminalInstance.clearSelection();
+        showToast('Kopyalandi');
+        return false; // prevent onData from firing
+      }
+      return true; // no selection → let onData handle as kill
+    }
+
+    // Ctrl+V: paste
+    if (e.ctrlKey && e.key === 'v') {
+      justPasted = true;
+      setTimeout(() => { justPasted = false; }, 200);
+      navigator.clipboard.readText().then(text => {
+        if (!text) return;
+        const clean = text.replace(/[\r\n]+/g, ' ');
+        lineBuffer = lineBuffer.substring(0, cursorPos) + clean + lineBuffer.substring(cursorPos);
+        cursorPos += clean.length;
+        const rest = lineBuffer.substring(cursorPos - clean.length);
+        terminalInstance.write(rest);
+        const back = rest.length - clean.length;
+        if (back > 0) terminalInstance.write('\x1b[' + back + 'D');
+      });
+      return false;
+    }
+
+    return true; // all other keys: let onData handle
+  });
+
+  // Redraw the current input line from scratch
+  function redrawLine(oldLen) {
+    // Move cursor to start of input, clear, rewrite
+    if (oldLen > 0) {
+      terminalInstance.write('\x1b[' + oldLen + 'D'); // move left oldLen
+    }
+    terminalInstance.write('\x1b[0K'); // clear from cursor to end
+    terminalInstance.write(lineBuffer);
+    // Move cursor to correct position
+    const diff = lineBuffer.length - cursorPos;
+    if (diff > 0) {
+      terminalInstance.write('\x1b[' + diff + 'D');
+    }
+  }
+
+  // Terminal input handler — local line editing
+  terminalInstance.onData((data) => {
+    if (!activeTerminalId) return;
+
+    // Skip duplicate paste from xterm's internal paste handler
+    if (justPasted && data.length > 1 && !data.startsWith('\x1b')) return;
+
+    // --- Enter ---
+    if (data === '\r' || data === '\n') {
+      terminalInstance.write('\r\n');
+      const cmd = lineBuffer;
+      lineBuffer = '';
+      cursorPos = 0;
+      historyIndex = -1;
+      savedLine = '';
+      if (cmd.trim()) {
+        commandHistory.push(cmd);
+        if (commandHistory.length > 500) commandHistory.shift();
+        pendingEchoSuppress = cmd; // suppress cmd.exe echo of this command
+      }
+      isRunningCommand = true;
+      promptReady = false;
+      window.claude.writeTerminal(activeTerminalId, cmd + '\r\n');
+      return;
+    }
+
+    // --- Ctrl+C: Kill process (copy is handled by attachCustomKeyEventHandler) ---
+    if (data === '\x03') {
+      // Always kill and respawn — safest approach
+      lineBuffer = '';
+      cursorPos = 0;
+      historyIndex = -1;
+      window.claude.killTerminal(activeTerminalId).then(async () => {
+        terminalInstance.writeln('\r\n\x1b[33m[Durduruldu]\x1b[0m');
+        isRunningCommand = false;
+        promptReady = false;
+        const res = await window.claude.createTerminal();
+        if (res) {
+          activeTerminalId = res.id;
+        }
+      });
+      return;
+    }
+
+    // --- Ctrl+L (clear screen) ---
+    if (data === '\x0c') {
+      terminalInstance.clear();
+      terminalInstance.write('\x1b[2J\x1b[H');
+      // Trigger a fresh prompt
+      lineBuffer = '';
+      cursorPos = 0;
+      window.claude.writeTerminal(activeTerminalId, '\r\n');
+      return;
+    }
+
+    // --- Ctrl+U (clear line before cursor) ---
+    if (data === '\x15') {
+      const oldCursorPos = cursorPos;
+      const oldLen = lineBuffer.length;
+      lineBuffer = lineBuffer.substring(cursorPos);
+      cursorPos = 0;
+      // Move to start of input
+      if (oldCursorPos > 0) terminalInstance.write('\x1b[' + oldCursorPos + 'D');
+      terminalInstance.write('\x1b[0K');
+      terminalInstance.write(lineBuffer);
+      if (lineBuffer.length > 0) terminalInstance.write('\x1b[' + lineBuffer.length + 'D');
+      return;
+    }
+
+    // --- Backspace ---
+    if (data === '\x7f' || data === '\b') {
+      if (cursorPos > 0) {
+        const oldLen = lineBuffer.length;
+        lineBuffer = lineBuffer.substring(0, cursorPos - 1) + lineBuffer.substring(cursorPos);
+        cursorPos--;
+        // Visual: move back, rewrite rest of line, clear extra char
+        terminalInstance.write('\x1b[D'); // move left
+        const rest = lineBuffer.substring(cursorPos);
+        terminalInstance.write(rest + ' '); // rewrite + clear last char
+        terminalInstance.write('\x1b[' + (rest.length + 1) + 'D'); // move back
+      }
+      return;
+    }
+
+    // --- Delete key ---
+    if (data === '\x1b[3~') {
+      if (cursorPos < lineBuffer.length) {
+        lineBuffer = lineBuffer.substring(0, cursorPos) + lineBuffer.substring(cursorPos + 1);
+        const rest = lineBuffer.substring(cursorPos);
+        terminalInstance.write(rest + ' ');
+        terminalInstance.write('\x1b[' + (rest.length + 1) + 'D');
+      }
+      return;
+    }
+
+    // --- Arrow Up (history) ---
+    if (data === '\x1b[A') {
+      if (commandHistory.length === 0) return;
+      if (historyIndex === -1) {
+        savedLine = lineBuffer;
+        historyIndex = commandHistory.length - 1;
+      } else if (historyIndex > 0) {
+        historyIndex--;
+      } else {
+        return;
+      }
+      const oldLen = lineBuffer.length;
+      // Clear current line display
+      if (cursorPos > 0) terminalInstance.write('\x1b[' + cursorPos + 'D');
+      terminalInstance.write('\x1b[0K');
+      lineBuffer = commandHistory[historyIndex];
+      cursorPos = lineBuffer.length;
+      terminalInstance.write(lineBuffer);
+      return;
+    }
+
+    // --- Arrow Down (history) ---
+    if (data === '\x1b[B') {
+      if (historyIndex === -1) return;
+      const oldLen = lineBuffer.length;
+      if (cursorPos > 0) terminalInstance.write('\x1b[' + cursorPos + 'D');
+      terminalInstance.write('\x1b[0K');
+      if (historyIndex < commandHistory.length - 1) {
+        historyIndex++;
+        lineBuffer = commandHistory[historyIndex];
+      } else {
+        historyIndex = -1;
+        lineBuffer = savedLine;
+      }
+      cursorPos = lineBuffer.length;
+      terminalInstance.write(lineBuffer);
+      return;
+    }
+
+    // --- Arrow Left ---
+    if (data === '\x1b[D') {
+      if (cursorPos > 0) {
+        cursorPos--;
+        terminalInstance.write('\x1b[D');
+      }
+      return;
+    }
+
+    // --- Arrow Right ---
+    if (data === '\x1b[C') {
+      if (cursorPos < lineBuffer.length) {
+        cursorPos++;
+        terminalInstance.write('\x1b[C');
+      }
+      return;
+    }
+
+    // --- Home ---
+    if (data === '\x1b[H' || data === '\x1b[1~' || data === '\x01') {
+      if (cursorPos > 0) {
+        terminalInstance.write('\x1b[' + cursorPos + 'D');
+        cursorPos = 0;
+      }
+      return;
+    }
+
+    // --- End ---
+    if (data === '\x1b[F' || data === '\x1b[4~' || data === '\x05') {
+      const diff = lineBuffer.length - cursorPos;
+      if (diff > 0) {
+        terminalInstance.write('\x1b[' + diff + 'C');
+        cursorPos = lineBuffer.length;
+      }
+      return;
+    }
+
+    // --- Ctrl+V is handled by attachCustomKeyEventHandler ---
+
+    // --- Tab (basic: insert spaces) ---
+    if (data === '\t') {
+      const spaces = '    ';
+      lineBuffer = lineBuffer.substring(0, cursorPos) + spaces + lineBuffer.substring(cursorPos);
+      cursorPos += spaces.length;
+      const rest = lineBuffer.substring(cursorPos - spaces.length);
+      terminalInstance.write(rest);
+      const back = rest.length - spaces.length;
+      if (back > 0) terminalInstance.write('\x1b[' + back + 'D');
+      return;
+    }
+
+    // --- Paste (multi-char data) or normal character ---
+    if (data.length >= 1 && !data.startsWith('\x1b')) {
+      // Insert at cursor position
+      lineBuffer = lineBuffer.substring(0, cursorPos) + data + lineBuffer.substring(cursorPos);
+      cursorPos += data.length;
+      // Write from cursor: new chars + rest of line
+      const rest = lineBuffer.substring(cursorPos - data.length);
+      terminalInstance.write(rest);
+      const back = rest.length - data.length;
+      if (back > 0) terminalInstance.write('\x1b[' + back + 'D');
+      return;
+    }
+  });
+
+  // Process output → terminal
+  window.claude.onTerminalData((id, data) => {
+    if (id === activeTerminalId && terminalInstance) {
+      let output = data;
+
+      // Suppress command echo from cmd.exe
+      // cmd.exe echoes the command we sent — strip it from the first output chunk
+      if (pendingEchoSuppress) {
+        const echoCmd = pendingEchoSuppress;
+        pendingEchoSuppress = null;
+        // cmd.exe output typically: "command\r\n...output...\r\nprompt>"
+        // Strip the echoed command line
+        const echoIndex = output.indexOf(echoCmd);
+        if (echoIndex !== -1) {
+          // Remove the echo + the \r\n after it
+          let endIdx = echoIndex + echoCmd.length;
+          if (output[endIdx] === '\r') endIdx++;
+          if (output[endIdx] === '\n') endIdx++;
+          output = output.substring(0, echoIndex) + output.substring(endIdx);
+        }
+      }
+
+      if (output) terminalInstance.write(output);
+      lastOutputTime = Date.now();
+      // Detect prompt return (cmd.exe prompt ends with >)
+      const trimmed = output.trimEnd();
+      if (trimmed.endsWith('>')) {
+        isRunningCommand = false;
+        promptReady = true;
+      }
+      // Buffer output for "send to claude" feature
+      terminalOutputBuffer.push(data);
+      if (terminalOutputBuffer.length > MAX_TERMINAL_BUFFER) {
+        terminalOutputBuffer = terminalOutputBuffer.slice(-MAX_TERMINAL_BUFFER);
+      }
+      // Check for dev server URLs
+      detectDevServer(data);
+    }
+  });
+
+  // Process exit → show message and respawn
+  window.claude.onTerminalExit((id, code) => {
+    if (id === activeTerminalId && terminalInstance) {
+      terminalInstance.writeln(`\r\n\x1b[33m[Process exited with code ${code}]\x1b[0m`);
+      isRunningCommand = false;
+      // Auto-respawn terminal
+      window.claude.createTerminal().then(res => {
+        if (res) activeTerminalId = res.id;
+      });
+    }
+  });
+
+  // Resize observer
+  const resizeObserver = new ResizeObserver(() => {
+    if (terminalFitAddon && terminalInstance) {
+      try { terminalFitAddon.fit(); } catch(e) {}
+    }
+  });
+  resizeObserver.observe(container);
+
+  // Prevent xterm's built-in paste handler (we handle Ctrl+V ourselves)
+  container.addEventListener('paste', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+}
+
+function toggleTerminalPanel() {
+  const panel = $('#terminalPanel');
+  const btn = $('#terminalToggle');
+  panel.classList.toggle('collapsed');
+  const isCollapsed = panel.classList.contains('collapsed');
+  btn.innerHTML = isCollapsed ? '&#9650;' : '&#9660;';
+  if (!isCollapsed && terminalFitAddon) {
+    setTimeout(() => { try { terminalFitAddon.fit(); } catch(e) {} }, 50);
+  }
+}
+
+function getTerminalOutput(lines) {
+  const n = lines || 50;
+  const text = terminalOutputBuffer.join('');
+  const allLines = text.split('\n');
+  return allLines.slice(-n).join('\n');
+}
+
+function sendTerminalOutputToClaude() {
+  const output = getTerminalOutput(50);
+  if (!output.trim()) {
+    showToast('Terminal ciktisi bos');
+    return;
+  }
+  const chatInput = $('#chatInput');
+  chatInput.value = `Terminal ciktisi:\n\`\`\`\n${output.trim()}\n\`\`\`\n\nBu ciktiyi analiz et:`;
+  chatInput.focus();
+  showToast('Terminal ciktisi sohbete eklendi');
+}
+
+let lastDetectedPort = null;
+function detectDevServer(data) {
+  for (const pattern of DEV_SERVER_PATTERNS) {
+    const match = data.match(pattern);
+    if (match && match[1]) {
+      const port = match[1];
+      if (port === lastDetectedPort) return;
+      lastDetectedPort = port;
+      const url = `http://localhost:${port}`;
+      showToast(`Dev server algilandi: ${url} — Preview'da aciliyor`, 'success', 4000);
+      // Fill URL and auto-navigate
+      const urlInput = $('#previewUrl');
+      if (urlInput) urlInput.value = url;
+      // Switch to preview tab and navigate
+      switchRightTab('preview');
+      const panel = $('#rightPanel');
+      if (panel.classList.contains('collapsed')) {
+        panel.classList.remove('collapsed');
+        $('#codePanelReopen').style.display = 'none';
+      }
+      setTimeout(() => navigatePreview(url), 1000); // wait for server to be ready
+      return;
+    }
+  }
+}
+
+// ===== Right Panel Tab Switching =====
+let activeRightTab = 'code';
+
+function switchRightTab(tab) {
+  if (tab === activeRightTab) return;
+  activeRightTab = tab;
+
+  // Update tab buttons
+  document.querySelectorAll('.right-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.panel === tab);
+  });
+
+  // Show/hide views
+  const codeView = $('#codeView');
+  const previewView = $('#previewView');
+
+  if (tab === 'code') {
+    codeView.classList.add('active');
+    codeView.style.display = '';
+    previewView.classList.remove('active');
+    previewView.style.display = 'none';
+  } else {
+    codeView.classList.remove('active');
+    codeView.style.display = 'none';
+    previewView.classList.add('active');
+    previewView.style.display = '';
+  }
+}
+
+// ===== Preview Controller (iframe-based) =====
+let previewIframe = null;
+let currentPreviewUrl = '';
+
+function navigatePreview(url) {
+  if (!url) return;
+  // Add protocol if missing
+  if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
+  currentPreviewUrl = url;
+
+  const container = $('#previewContainer');
+  // Remove placeholder
+  const placeholder = container.querySelector('.preview-placeholder');
+  if (placeholder) placeholder.remove();
+
+  // Create or reuse iframe
+  if (!previewIframe) {
+    previewIframe = document.createElement('iframe');
+    previewIframe.className = 'preview-iframe';
+    previewIframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups');
+    container.appendChild(previewIframe);
+  }
+
+  previewIframe.src = url;
+  $('#previewUrl').value = url;
+  showToast('Preview yukleniyor: ' + url);
+}
+
+function updatePreviewBounds() {
+  // No-op for iframe approach — iframe is in DOM, auto-sizes
+}
+
+async function takeScreenshotAndAsk() {
+  if (!currentPreviewUrl) {
+    showToast('Screenshot alinamadi — once bir URL yukleyin', 'error');
+    return;
+  }
+  const screenshot = await window.claude.screenshotPreview();
+  if (!screenshot) {
+    showToast('Screenshot alinamadi', 'error');
+    return;
+  }
+  // Add screenshot to pastedImages (need data URI for preview)
+  state.pastedImages.push({
+    base64: 'data:image/png;base64,' + screenshot.base64,
+    path: screenshot.path,
+    name: 'preview_screenshot.png'
+  });
+  renderImagePreviews();
+  // Pre-fill prompt
+  const chatInput = $('#chatInput');
+  chatInput.value = `Bu screenshot ${currentPreviewUrl} adresinden alindi. Gorsel olarak incele ve sorunlari/iyilestirmeleri belirt:`;
+  chatInput.focus();
+  showToast('Screenshot eklendi, mesajinizi gonderebilirsiniz');
+}
+
+// ===== Terminal + Preview Event Listeners =====
+function setupTerminalAndPreview() {
+  // Terminal toggle
+  $('#terminalToggle').onclick = toggleTerminalPanel;
+  $('#terminalClear').onclick = () => {
+    if (terminalInstance) terminalInstance.clear();
+    terminalOutputBuffer = [];
+  };
+  $('#terminalSendToClaude').onclick = sendTerminalOutputToClaude;
+
+  // Right panel tabs
+  $('#rightTabCode').onclick = () => switchRightTab('code');
+  $('#rightTabPreview').onclick = () => switchRightTab('preview');
+
+  // Preview controls
+  $('#previewGo').onclick = () => navigatePreview($('#previewUrl').value);
+  $('#previewUrl').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') navigatePreview($('#previewUrl').value);
+  });
+  $('#previewRefresh').onclick = () => window.claude.refreshPreview();
+  $('#previewScreenshot').onclick = takeScreenshotAndAsk;
+
+  // Update preview bounds on window resize
+  window.addEventListener('resize', () => {
+    if (activeRightTab === 'preview') {
+      updatePreviewBounds();
+    }
+    if (terminalFitAddon) {
+      try { terminalFitAddon.fit(); } catch(e) {}
+    }
+  });
+
+  // Initialize terminal
+  initTerminal();
+}
+
 init();
+setupTerminalAndPreview();

@@ -20,7 +20,9 @@
   --titlebar-height: 38px;
   --sidebar-width: 240px;
   --sidebar-collapsed: 44px;
-  --code-panel-width: 380px;
+  --right-panel-width: 380px;
+  --terminal-height: 280px;
+  --terminal-min-height: 80px;
   --radius: 8px;
   --radius-sm: 4px;
 }
@@ -571,16 +573,24 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
   color: var(--success) !important;
 }
 
-/* ===== Code Panel ===== */
-.code-panel {
-  width: var(--code-panel-width); background: #000000;
+/* ===== Main Area Layout (v2) ===== */
+#mainArea {
+  flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden;
+}
+#upperPanels {
+  flex: 1; display: flex; min-height: 0; overflow: hidden;
+}
+
+/* ===== Right Panel (Code + Preview) ===== */
+.right-panel {
+  width: var(--right-panel-width); background: #000000;
   border-left: 1px solid #1a1a1a; display: flex; flex-direction: column;
   overflow: hidden; transition: width 0.25s ease;
 }
-.code-panel.collapsed { width: 0; min-width: 0; border: none; overflow: hidden; }
-.code-panel.collapsed * { visibility: hidden; }
+.right-panel.collapsed { width: 0; min-width: 0; border: none; overflow: hidden; }
+.right-panel.collapsed * { visibility: hidden; }
 
-/* Reopen button when code panel is collapsed */
+/* Reopen button when right panel is collapsed */
 .code-panel-reopen {
   width: 32px; background: var(--bg-secondary); border-left: 1px solid var(--border);
   display: flex; align-items: center; justify-content: center;
@@ -589,19 +599,93 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
 }
 .code-panel-reopen:hover { color: var(--accent); background: var(--accent-dim); }
 
-.code-header {
-  padding: 10px 12px; border-bottom: 1px solid #1a1a1a; background: #000000;
+/* Right Panel Header + Tabs */
+.right-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 8px; border-bottom: 1px solid #1a1a1a; background: #0a0a0a;
 }
-.code-header-top {
-  display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;
+.right-tabs-bar { display: flex; gap: 2px; }
+.right-tab {
+  padding: 5px 12px; font-size: 12px; border: none; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  transition: all 0.15s; white-space: nowrap;
 }
-.code-header-top h3 { font-size: 12px; color: var(--text-secondary); font-weight: 600; }
-.code-panel-toggle {
+.right-tab:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.right-tab.active { color: var(--accent); background: var(--accent-dim); }
+.right-panel-toggle {
   background: none; border: none; color: var(--text-muted); cursor: pointer;
   font-size: 14px; padding: 2px 4px; border-radius: var(--radius-sm);
   transition: all 0.15s;
 }
-.code-panel-toggle:hover { color: var(--error); }
+.right-panel-toggle:hover { color: var(--error); }
+
+/* Right Panel Views */
+.right-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.right-view:not(.active) { display: none; }
+
+/* Preview Toolbar */
+.preview-toolbar {
+  display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid #1a1a1a;
+  background: #0a0a0a;
+}
+.preview-url-input {
+  flex: 1; padding: 4px 8px; font-size: 12px; font-family: 'Cascadia Code', 'Consolas', monospace;
+  background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); outline: none; transition: border-color 0.15s;
+}
+.preview-url-input:focus { border-color: var(--accent); }
+.preview-btn {
+  padding: 4px 8px; font-size: 13px; background: var(--bg-tertiary); color: var(--text-secondary);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer;
+  transition: all 0.15s; white-space: nowrap;
+}
+.preview-btn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--accent); }
+.preview-btn-screenshot { color: var(--warning); }
+.preview-btn-screenshot:hover { color: #fbbf24; border-color: var(--warning); }
+
+/* Preview Container */
+.preview-container { flex: 1; position: relative; background: #111; overflow: hidden; }
+.preview-placeholder {
+  color: #333333; font-size: 13px; text-align: center; padding-top: 60px;
+}
+.preview-iframe {
+  width: 100%; height: 100%; border: none; background: #fff;
+}
+
+/* ===== Terminal Panel ===== */
+.terminal-panel {
+  height: var(--terminal-height); min-height: var(--terminal-min-height);
+  background: #0a0a0a; border-top: 1px solid #1a1a1a;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.terminal-panel.collapsed {
+  height: 32px !important; min-height: 32px !important;
+}
+.terminal-panel.collapsed .terminal-container { display: none; }
+
+.terminal-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 10px; background: #0d0d0d; border-bottom: 1px solid #1a1a1a;
+  flex-shrink: 0; height: 32px;
+}
+.terminal-header-left { display: flex; align-items: center; gap: 8px; }
+.terminal-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.terminal-shell { font-size: 11px; color: var(--text-muted); }
+.terminal-header-right { display: flex; align-items: center; gap: 4px; }
+.terminal-btn {
+  padding: 3px 8px; font-size: 11px; background: none; color: var(--text-muted);
+  border: 1px solid transparent; border-radius: var(--radius-sm); cursor: pointer;
+  transition: all 0.15s; white-space: nowrap;
+}
+.terminal-btn:hover { color: var(--text-primary); border-color: var(--border); background: var(--bg-tertiary); }
+.terminal-container { flex: 1; overflow: hidden; padding: 4px; }
+
+/* Horizontal resize handle (for terminal) */
+.resize-handle-h {
+  height: 4px; cursor: row-resize; background: transparent;
+  transition: background 0.15s; flex-shrink: 0;
+}
+.resize-handle-h:hover, .resize-handle-h.active { background: var(--accent); }
 
 .code-tabs {
   display: flex; gap: 4px; overflow-x: auto; padding-bottom: 2px;
@@ -682,6 +766,43 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
 [data-theme="light"] .hl-comment { color: #9ca3af; font-style: italic; }
 [data-theme="light"] .hl-number { color: #d97706; }
 [data-theme="light"] .hl-func { color: #2563eb; }
+
+/* ===== Inline Code Block (with Run/Copy buttons) ===== */
+.code-block-inline {
+  background: #0d0e1a; border-radius: var(--radius-sm); margin: 8px 0;
+  overflow: hidden; border: 1px solid #1a1a2e;
+}
+.code-block-inline-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 10px; background: #111122; font-size: 11px;
+}
+.code-block-inline-header .code-block-lang { color: var(--accent); font-weight: 600; }
+.code-block-actions { display: flex; gap: 4px; }
+.code-run-btn {
+  background: rgba(52, 211, 153, 0.15); border: 1px solid rgba(52, 211, 153, 0.3);
+  color: #34d399; padding: 2px 8px; border-radius: var(--radius-sm); cursor: pointer;
+  font-size: 10px; transition: all 0.15s; white-space: nowrap;
+}
+.code-run-btn:hover { background: rgba(52, 211, 153, 0.3); border-color: #34d399; color: #6ee7b7; }
+.code-copy-btn {
+  background: none; border: 1px solid var(--border); color: var(--text-secondary);
+  padding: 2px 8px; border-radius: var(--radius-sm); cursor: pointer;
+  font-size: 10px; transition: all 0.15s;
+}
+.code-copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+.code-copy-btn.copied { border-color: var(--success); color: var(--success); }
+.code-block-inline pre {
+  padding: 8px 10px; margin: 0; overflow-x: auto;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 12.5px; line-height: 1.5; color: var(--text-primary);
+  white-space: pre-wrap; word-wrap: break-word;
+}
+[data-theme="light"] .code-block-inline { background: #f0f0f5; border-color: #e5e7eb; }
+[data-theme="light"] .code-block-inline-header { background: #e8e8f0; }
+
+/* ===== Dev Server Toast ===== */
+.toast.success { border-left: 3px solid var(--success); }
+.toast.error { border-left: 3px solid var(--error); }
 
 /* ===== Help Modal ===== */
 .modal-overlay {

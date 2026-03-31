@@ -54,5 +54,21 @@ contextBridge.exposeInMainWorld('claude', {
   getTotalTokens: () => ipcRenderer.invoke('get-total-tokens'),
   saveTotalTokens: (tokens) => ipcRenderer.invoke('save-total-tokens', tokens),
   saveTotalTokensSync: (tokens) => ipcRenderer.sendSync('save-total-tokens-sync', tokens),
-  resetTotalTokens: () => ipcRenderer.invoke('reset-total-tokens')
+  resetTotalTokens: () => ipcRenderer.invoke('reset-total-tokens'),
+
+  // Terminal
+  createTerminal: () => ipcRenderer.invoke('terminal:create'),
+  writeTerminal: (id, data) => ipcRenderer.invoke('terminal:write', id, data),
+  killTerminal: (id) => ipcRenderer.invoke('terminal:kill', id),
+  onTerminalData: (callback) => ipcRenderer.on('terminal:data', (_, id, data) => callback(id, data)),
+  onTerminalExit: (callback) => ipcRenderer.on('terminal:exit', (_, id, code) => callback(id, code)),
+
+  // Web Preview
+  createPreview: () => ipcRenderer.invoke('preview:create'),
+  navigatePreview: (url) => ipcRenderer.invoke('preview:navigate', url),
+  setPreviewBounds: (bounds) => ipcRenderer.invoke('preview:set-bounds', bounds),
+  hidePreview: () => ipcRenderer.invoke('preview:hide'),
+  refreshPreview: () => ipcRenderer.invoke('preview:refresh'),
+  screenshotPreview: () => ipcRenderer.invoke('preview:screenshot'),
+  getPreviewUrl: () => ipcRenderer.invoke('preview:get-url')
 });

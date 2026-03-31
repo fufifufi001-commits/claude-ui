@@ -3,15 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Claude UI</title>
+  <title>Claude UI Studio</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="vendor/xterm.css">
 </head>
 <body>
   <!-- ===== SETUP WIZARD (ilk calistirmada gorunur) ===== -->
   <div id="setupWizard" class="setup-overlay" style="display:none;">
     <div class="setup-box">
       <div class="setup-header">
-        <h1>&#9672; Claude UI</h1>
+        <h1>&#9672; Claude UI Studio</h1>
         <p>Hos geldiniz! Baslangic ayarlarini yapalim.</p>
       </div>
 
@@ -61,7 +62,7 @@
   <!-- Custom Title Bar -->
   <div id="titlebar">
     <div class="titlebar-drag">
-      <span class="titlebar-logo">&#9672; Claude UI</span>
+      <span class="titlebar-logo">&#9672; Claude UI Studio</span>
       <span class="titlebar-workdir" id="workdirLabel" title="Calisma dizini secmek icin tikla">Dizin sec...</span>
     </div>
     <div class="titlebar-center">
@@ -100,7 +101,7 @@
   <div id="helpModal" class="modal-overlay" style="display:none;">
     <div class="modal">
       <div class="modal-header">
-        <h2>Claude UI Rehberi</h2>
+        <h2>Claude UI Studio Rehberi</h2>
         <button class="modal-close" id="helpClose">&times;</button>
       </div>
       <div class="modal-body">
@@ -153,7 +154,7 @@
   <!-- Main Layout -->
   <div id="app">
     <!-- Left Sidebar (collapsible) -->
-    <aside id="sidebar" class="sidebar">
+    <aside id="sidebar" class="sidebar sidebar-v2">
       <div class="sidebar-toggle" id="sidebarToggle" title="Paneli ac/kapat (Ctrl+B)">&#9776;</div>
       <div class="sidebar-content">
         <!-- History Section -->
@@ -175,6 +176,10 @@
 
     <!-- Resize handle -->
     <div class="resize-handle" id="resizeLeft"></div>
+
+    <!-- Main Area (upper panels + terminal) -->
+    <div id="mainArea">
+      <div id="upperPanels">
 
     <!-- Chat Panel -->
     <main id="chatPanel" class="chat-panel">
@@ -245,24 +250,85 @@
     <!-- Resize handle -->
     <div class="resize-handle" id="resizeRight"></div>
 
-    <!-- Code Panel Toggle (visible when collapsed) -->
-    <div class="code-panel-reopen" id="codePanelReopen" title="Kod panelini ac (Ctrl+J)" style="display:none;">&#128196;</div>
+    <!-- Right Panel Toggle (visible when collapsed) -->
+    <div class="code-panel-reopen" id="codePanelReopen" title="Sag paneli ac (Ctrl+J)" style="display:none;">&#128196;</div>
 
-    <!-- Code Panel -->
-    <aside id="codePanel" class="code-panel">
-      <div class="code-header">
-        <div class="code-header-top">
-          <h3>&#128196; Kod</h3>
-          <button class="code-panel-toggle" id="codePanelToggle" title="Paneli kapat (Ctrl+J)">&#10005;</button>
+    <!-- Right Panel (Code + Preview tabs) -->
+    <aside id="rightPanel" class="right-panel">
+      <div class="right-header">
+        <div class="right-tabs-bar">
+          <button class="right-tab active" data-panel="code" id="rightTabCode" title="Kod paneli">&#128196; Kod</button>
+          <button class="right-tab" data-panel="preview" id="rightTabPreview" title="Web onizleme">&#127760; Preview</button>
         </div>
-        <div class="code-tabs" id="codeTabs"></div>
+        <button class="right-panel-toggle" id="rightPanelToggle" title="Paneli kapat (Ctrl+J)">&#10005;</button>
       </div>
-      <div id="codeContent" class="code-content">
-        <div class="code-placeholder">Kod bloklari burada gorunecek<br><br><span style="font-size:11px;color:var(--text-muted);">Sohbetteki kod bloklarina tiklayarak<br>buraya gonderebilirsiniz</span></div>
+
+      <!-- Code View -->
+      <div id="codeView" class="right-view active">
+        <div class="code-tabs" id="codeTabs"></div>
+        <div id="codeContent" class="code-content">
+          <div class="code-placeholder">Kod bloklari burada gorunecek<br><br><span style="font-size:11px;color:var(--text-muted);">Sohbetteki kod bloklarina tiklayarak<br>buraya gonderebilirsiniz</span></div>
+        </div>
+      </div>
+
+      <!-- Preview View -->
+      <div id="previewView" class="right-view" style="display:none;">
+        <div class="preview-toolbar">
+          <input type="text" id="previewUrl" class="preview-url-input" placeholder="http://localhost:3000" spellcheck="false">
+          <button class="preview-btn" id="previewGo" title="Git">&#10148;</button>
+          <button class="preview-btn" id="previewRefresh" title="Yenile">&#8635;</button>
+          <button class="preview-btn preview-btn-screenshot" id="previewScreenshot" title="Screenshot al ve Claude'a gonder">&#128247;</button>
+        </div>
+        <div id="previewContainer" class="preview-container">
+          <div class="preview-placeholder">URL girin ve &#10148; tiklayin<br><br><span style="font-size:11px;color:var(--text-muted);">Terminal'de dev server baslatinca<br>otomatik algılanacak</span></div>
+        </div>
       </div>
     </aside>
-  </div>
 
+      </div><!-- /upperPanels -->
+
+      <!-- Terminal Resize Handle -->
+      <div class="resize-handle-h" id="resizeBottom" title="Terminal boyutunu ayarla"></div>
+
+      <!-- Terminal Panel -->
+      <div id="terminalPanel" class="terminal-panel">
+        <div class="terminal-header">
+          <div class="terminal-header-left">
+            <span class="terminal-title">&#9000; Terminal</span>
+            <span class="terminal-shell" id="terminalShellLabel"></span>
+          </div>
+          <div class="terminal-header-right">
+            <button class="terminal-btn" id="terminalSendToClaude" title="Ciktiyi Claude'a gonder">&#8679; Claude'a Gonder</button>
+            <button class="terminal-btn" id="terminalClear" title="Temizle">&#128465;</button>
+            <button class="terminal-btn" id="terminalToggle" title="Terminal ac/kapat">&#9660;</button>
+          </div>
+        </div>
+        <div id="terminalContainer" class="terminal-container"></div>
+      </div>
+
+    </div><!-- /mainArea -->
+  </div><!-- /app -->
+
+  <script>
+    // Prevent UMD scripts from using module.exports (Electron renderer workaround)
+    if (typeof module !== 'undefined') {
+      window.__module = module;
+      window.__exports = typeof exports !== 'undefined' ? exports : undefined;
+      module = undefined;
+      exports = undefined;
+    }
+  </script>
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
+  <script>
+    // Restore module for any CommonJS needs
+    if (window.__module) {
+      module = window.__module;
+      exports = window.__exports;
+      delete window.__module;
+      delete window.__exports;
+    }
+  </script>
   <script src="renderer.js"></script>
 </body>
 </html>
