@@ -13,7 +13,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+      - run: npm install --ignore-scripts
+      - run: npx electron-rebuild -f -w node-pty
       - run: npx electron-builder --win --publish never
       - uses: actions/upload-artifact@v4
         with:
@@ -27,7 +28,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+      - run: npm install --ignore-scripts
+      - run: npx electron-rebuild -f -w node-pty
       - run: npx electron-builder --mac --publish never
       - uses: actions/upload-artifact@v4
         with:
