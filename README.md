@@ -1,16 +1,26 @@
-# Claude UI
+# Claude UI Studio v2.0.0
 
-A modern, 4-panel desktop wrapper for [Claude Code CLI](https://github.com/anthropics/claude-code). Makes working with Claude Code visual, intuitive and productive.
+A modern, 4-panel desktop wrapper for [Claude Code CLI](https://github.com/anthropics/claude-code) with integrated terminal, live preview, and visual testing. Makes working with Claude Code visual, intuitive and productive.
 
+![Version](https://img.shields.io/badge/version-2.0.0-orange)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Electron](https://img.shields.io/badge/electron-41-purple)
 
 ---
 
+## What's New in v2.0.0
+
+- **Integrated Terminal** — Built-in terminal panel powered by xterm.js, run commands without leaving the app
+- **Live Preview** — Real-time preview panel for web projects
+- **Visual Testing** — Side-by-side visual comparison and testing tools
+
 ## Features
 
 - **4-Panel Layout** — Chat, Code, History, Agent/Skill logs all visible at once
+- **Integrated Terminal** — Full terminal emulator with xterm.js (new in v2)
+- **Live Preview** — Real-time preview for web projects (new in v2)
+- **Visual Testing** — Side-by-side visual comparison tools (new in v2)
 - **Screenshot Paste** — `Ctrl+V` to paste screenshots directly into chat (no more Paint!)
 - **Code Panel** — Code blocks auto-extracted to a dedicated panel with syntax highlighting, tabs, and one-click copy
 - **Click-to-Send** — Click any code block in chat to send it to the code panel
@@ -54,7 +64,7 @@ A modern, 4-panel desktop wrapper for [Claude Code CLI](https://github.com/anthr
 
 ### Windows (Portable)
 
-1. Download `Claude.UI.1.3.0.exe` from [Releases](../../releases)
+1. Download `Claude.UI.Studio.2.0.0.exe` from [Releases](../../releases)
 2. Double-click to run — no installation needed
 3. Setup wizard will guide you through initial configuration
 
