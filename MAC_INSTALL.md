@@ -15,7 +15,7 @@
 ## Kurulum
 
 1. GitHub Releases sayfasindan Mac zip dosyasini indir:
-   https://github.com/fufifufi001-commits/claude-ui/releases/tag/v1.4.0
+   https://github.com/fufifufi001-commits/claude-ui/releases/tag/v2.0.0
 
 2. Zip dosyasini ac (cift tikla)
 
